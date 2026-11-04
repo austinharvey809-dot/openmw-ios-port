@@ -13,6 +13,8 @@ from unittest.mock import patch
 import warnings
 import zipfile
 
+from generate_checkerboard import checkerboard_rgba
+
 from package_ios import (
     Entry, PREFIX, ValidationError, inspect_dependencies, macho, main,
     system_dependency, validate_bundle, validate_ipa, write_ipa,
@@ -51,7 +53,7 @@ def shader(stage=0):
     return struct.pack(f"<{len(words)}I", *words)
 
 
-def bundle(*, dependencies=(), rpaths=(), mode="clear"):
+def bundle(*, dependencies=(), rpaths=(), mode="clear", cube_available=False):
     info = {
         "CFBundleExecutable": "IOSRenderSmoke",
         "CFBundleIdentifier": "org.openmw.experiments.ios-render-smoke",
@@ -67,13 +69,19 @@ def bundle(*, dependencies=(), rpaths=(), mode="clear"):
             }
         },
     }
+    if cube_available or mode == "cube":
+        info["IOSRenderSmokeCubeAvailable"] = True
     files = {
         "Info.plist": Entry(plistlib.dumps(info), REGULAR),
         "IOSRenderSmoke": Entry(binary(dependencies=dependencies, rpaths=rpaths), EXECUTABLE),
     }
-    if mode == "triangle":
+    if mode in ("cube", "triangle"):
         files.update({"triangle.vert.spv": Entry(shader(0), REGULAR),
                       "triangle.frag.spv": Entry(shader(4), REGULAR)})
+    if cube_available or mode == "cube":
+        files.update({"cube.vert.spv": Entry(shader(0), REGULAR),
+                      "cube.frag.spv": Entry(shader(4), REGULAR),
+                      "checkerboard.rgba": Entry(checkerboard_rgba(), REGULAR)})
     return files
 
 
@@ -155,6 +163,64 @@ class PackageIOSTests(unittest.TestCase):
                     info["IOSRenderSmokeMode"] = mode
                 files["Info.plist"] = Entry(plistlib.dumps(info), REGULAR)
                 with self.assertRaisesRegex(ValidationError, "IOSRenderSmokeMode"):
+                    validate_bundle(files)
+
+    def test_cube_and_triangle_start_require_declared_cube_resources_and_round_trip(self):
+        for mode in ("cube", "triangle"):
+            with self.subTest(mode=mode):
+                files = bundle(mode=mode, cube_available=True)
+                ipa = self.root / f"{mode}.ipa"
+                write_ipa(files, ipa)
+                report = validate_ipa(ipa, expected=files)
+                self.assertEqual(report["render_mode"], mode)
+                self.assertTrue(report["cube_available"])
+                self.assertEqual(len(report["required_resources"]), 7)
+                self.assertEqual(set(report["shaders"]), {"triangle.vert.spv", "triangle.frag.spv", "cube.vert.spv", "cube.frag.spv"})
+                texture = report["textures"]["checkerboard.rgba"]
+                self.assertEqual((texture["width"], texture["height"], texture["format"]), (32, 32, "RGBA8_UNORM"))
+                self.assertEqual(texture["sha256"], hashlib.sha256(checkerboard_rgba()).hexdigest())
+
+    def test_explicit_triangle_only_bundle_needs_no_cube_resources(self):
+        files = bundle(mode="triangle")
+        info = plistlib.loads(files["Info.plist"].data)
+        info["IOSRenderSmokeCubeAvailable"] = False
+        files["Info.plist"] = Entry(plistlib.dumps(info), REGULAR)
+        report = validate_bundle(files)
+        self.assertFalse(report["cube_available"])
+        self.assertEqual(report["textures"], {})
+        self.assertEqual(report["required_resources"],
+                         ["Info.plist", "IOSRenderSmoke", "triangle.vert.spv", "triangle.frag.spv"])
+
+    def test_missing_cube_resource_cannot_silently_fall_back(self):
+        for mode in ("cube", "triangle"):
+            for resource in ("cube.vert.spv", "cube.frag.spv", "checkerboard.rgba"):
+                with self.subTest(mode=mode, resource=resource):
+                    files = bundle(mode=mode, cube_available=True)
+                    del files[resource]
+                    with self.assertRaisesRegex(ValidationError, "Missing required cube|Missing required original checkerboard"):
+                        validate_bundle(files)
+
+    def test_cube_rejects_wrong_shader_stage_and_corrupt_texture(self):
+        for resource, data in (("cube.vert.spv", shader(4)), ("cube.frag.spv", shader(0)),
+                               ("checkerboard.rgba", checkerboard_rgba()[:-1]),
+                               ("checkerboard.rgba", bytes(4096))):
+            with self.subTest(resource=resource, size=len(data)):
+                files = bundle(mode="cube")
+                files[resource] = Entry(data, REGULAR)
+                with self.assertRaisesRegex(ValidationError, "stage|Checkerboard"):
+                    validate_bundle(files)
+
+    def test_cube_capability_marker_is_strict_and_consistent(self):
+        for mode, marker in (("cube", False), ("cube", None), ("triangle", "true"), ("clear", True)):
+            with self.subTest(mode=mode, marker=marker):
+                files = bundle(mode=mode)
+                info = plistlib.loads(files["Info.plist"].data)
+                if marker is None:
+                    info.pop("IOSRenderSmokeCubeAvailable", None)
+                else:
+                    info["IOSRenderSmokeCubeAvailable"] = marker
+                files["Info.plist"] = Entry(plistlib.dumps(info), REGULAR)
+                with self.assertRaisesRegex(ValidationError, "Cube start|CubeAvailable|Clear-only"):
                     validate_bundle(files)
 
     def test_ipa_round_trip_preserves_payload_permissions_contents_and_hash(self):

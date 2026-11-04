@@ -14,6 +14,17 @@ on:
         description: Build the original clear-only fallback without shaders
         type: boolean
         default: false
+      triangle_only:
+        description: Independent triangle fallback without cube resources (clear-only overrides)
+        type: boolean
+        default: false
+      start_mode:
+        description: Initial geometry mode (both remain selectable; ignored for clear-only builds)
+        type: choice
+        options:
+          - cube
+          - triangle
+        default: cube
 
 permissions:
   contents: read
@@ -32,6 +43,8 @@ jobs:
       # glslang 15.1.0; host build tool only, never linked into the iOS app.
       GLSLANG_REVISION: 1062752a891c95b2bfeed9e356562d88f9df84ac
       SMOKE_CLEAR_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.clear_only && 'ON' || 'OFF' }}
+      SMOKE_TRIANGLE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.triangle_only && 'ON' || 'OFF' }}
+      SMOKE_START_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.start_mode || 'cube' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -62,6 +75,12 @@ jobs:
           c++ -std=c++17 -Wall -Wextra -Werror "$EXPERIMENT/tests/frame_timing.cpp" \
             -o "$RUNNER_TEMP/smoke-timing-tests"
           "$RUNNER_TEMP/smoke-timing-tests" 2>&1 | tee "$EXPERIMENT/artifacts/timing-tests.log"
+          c++ -std=c++17 -Wall -Wextra -Werror "$EXPERIMENT/tests/cube_scene.cpp" \
+            -o "$RUNNER_TEMP/smoke-cube-tests"
+          "$RUNNER_TEMP/smoke-cube-tests" 2>&1 | tee "$EXPERIMENT/artifacts/cube-scene-tests.log"
+          c++ -std=c++17 -Wall -Wextra -Werror "$EXPERIMENT/tests/render_mode.cpp" \
+            -o "$RUNNER_TEMP/smoke-mode-tests"
+          "$RUNNER_TEMP/smoke-mode-tests" 2>&1 | tee "$EXPERIMENT/artifacts/render-mode-tests.log"
 
       - name: Fetch only the pinned public iOS MoltenVK release
         run: |
@@ -105,7 +124,8 @@ jobs:
       - name: Configure the independent device app
         run: |
           set -euo pipefail
-          shader_args=(-DSMOKE_CLEAR_ONLY="$SMOKE_CLEAR_ONLY")
+          case "$SMOKE_START_MODE" in cube|triangle) ;; *) printf 'Invalid start mode\n' >&2; exit 1 ;; esac
+          shader_args=(-DSMOKE_CLEAR_ONLY="$SMOKE_CLEAR_ONLY" -DSMOKE_TRIANGLE_ONLY="$SMOKE_TRIANGLE_ONLY" -DSMOKE_START_MODE="$SMOKE_START_MODE")
           if [ "$SMOKE_CLEAR_ONLY" != ON ]; then
             shader_args+=(-DSMOKE_GLSLANG_VALIDATOR="$RUNNER_TEMP/glslang-host/StandAlone/glslang")
           fi

@@ -21,6 +21,8 @@ import subprocess
 import tempfile
 import zipfile
 
+from generate_checkerboard import HEIGHT, WIDTH, checkerboard_rgba
+
 
 APP_NAME = "IOSRenderSmoke.app"
 PREFIX = f"Payload/{APP_NAME}/"
@@ -391,13 +393,28 @@ def validate_bundle(files: dict[str, Entry], sdk: Path | None = None):
     require(isinstance(info.get("UILaunchScreen"), dict), "Missing inline launch-screen resource configuration")
     require(not any(key in info for key in ("UIMainStoryboardFile", "UILaunchStoryboardName")), "External storyboard resources are not part of this experiment")
     mode = info.get("IOSRenderSmokeMode")
-    require(mode in ("triangle", "clear"), "Missing/invalid IOSRenderSmokeMode (expected triangle or clear)")
-    required_resources, shaders = ["Info.plist", executable], {}
-    if mode == "triangle":
+    require(mode in ("cube", "triangle", "clear"), "Missing/invalid IOSRenderSmokeMode (expected cube, triangle or clear)")
+    cube_available = info.get("IOSRenderSmokeCubeAvailable", False)
+    require(type(cube_available) is bool, "IOSRenderSmokeCubeAvailable must be a boolean")
+    require(mode != "cube" or cube_available, "Cube start mode requires IOSRenderSmokeCubeAvailable=true")
+    require(not cube_available or mode in ("cube", "triangle"), "Clear-only build cannot advertise cube resources")
+    required_resources, shaders, textures = ["Info.plist", executable], {}, {}
+    if mode != "clear":
         for name, stage in (("triangle.vert.spv", 0), ("triangle.frag.spv", 4)):
             require(name in files, f"Missing required triangle shader resource: {name}")
             shaders[name] = spirv_metadata(files[name].data, stage, name)
             required_resources.append(name)
+    if cube_available:
+        for name, stage in (("cube.vert.spv", 0), ("cube.frag.spv", 4)):
+            require(name in files, f"Missing required cube shader resource: {name}")
+            shaders[name] = spirv_metadata(files[name].data, stage, name)
+            required_resources.append(name)
+        name = "checkerboard.rgba"
+        require(name in files, "Missing required original checkerboard texture: checkerboard.rgba")
+        require(files[name].data == checkerboard_rgba(), "Checkerboard texture does not match original 32x32 RGBA8 asset")
+        required_resources.append(name)
+        textures[name] = {"width": WIDTH, "height": HEIGHT, "format": "RGBA8_UNORM",
+                          "sha256": hashlib.sha256(files[name].data).hexdigest(), "original_generated_asset": True}
     manifest = info.get("UIApplicationSceneManifest", {})
     require(isinstance(manifest, dict), "Invalid scene manifest")
     configurations = manifest.get("UISceneConfigurations", {})
@@ -452,8 +469,9 @@ def validate_bundle(files: dict[str, Entry], sdk: Path | None = None):
     require(reachable == set(binaries), "Unreferenced native libraries in bundle are not permitted")
     return {"bundle_identifier": info["CFBundleIdentifier"], "executable": executable,
             "minimum_os": info["MinimumOSVersion"], "architecture": "arm64", "platform": "IOS",
-            "render_mode": mode, "required_resources": required_resources, "shaders": shaders,
-            "resource_note": "Inline launch/scene configuration; triangle mode requires both SPIR-V resources. Structural checks do not replace SPIR-V semantic validation or a device draw.",
+            "render_mode": mode, "cube_available": cube_available, "required_resources": required_resources,
+            "shaders": shaders, "textures": textures,
+            "resource_note": "Inline launch/scene configuration; geometry modes require their declared shader/texture resources. Structural checks do not replace SPIR-V semantic validation or a device draw.",
             "binaries": binaries, "dependencies": resolved, "sdk_availability_checked": sdk is not None}
 
 

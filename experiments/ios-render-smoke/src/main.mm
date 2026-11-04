@@ -7,6 +7,8 @@
 
 #include <vulkan/vulkan.h>
 #include "FrameTiming.hpp"
+#include "RenderMode.hpp"
+#include "CubeResources.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -75,10 +77,10 @@ namespace
     class Renderer
     {
     public:
-        void initialize(CAMetalLayer* layer, bool triangleAvailable, bool clearOnly)
+        void initialize(CAMetalLayer* layer, bool geometryAvailable, bool cubeAvailable, bool startCube, bool clearOnly)
         {
-            mTriangleAvailable = triangleAvailable;
-            mTriangle = triangleAvailable && !clearOnly;
+            mMode.configure(geometryAvailable, cubeAvailable,
+                startCube ? smoke::GeometryMode::Cube : smoke::GeometryMode::Triangle, clearOnly);
             uint32_t loaderVersion = VK_API_VERSION_1_0;
             check(vkEnumerateInstanceVersion(&loaderVersion), "vkEnumerateInstanceVersion");
             if (loaderVersion < VK_API_VERSION_1_1)
@@ -222,27 +224,34 @@ namespace
             VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             check(vkBeginCommandBuffer(mCommand, &begin), "vkBeginCommandBuffer");
-            VkClearValue clear{};
+            VkClearValue clears[2]{};
+            auto& clear = clears[0];
             // A slow visible color cycle distinguishes a live swapchain from a static launch screen.
             clear.color.float32[0] = 0.15f + 0.35f * static_cast<float>(0.5 + 0.5 * std::sin(seconds));
             clear.color.float32[1] = 0.15f + 0.35f * static_cast<float>(0.5 + 0.5 * std::sin(seconds + 2.1));
             clear.color.float32[2] = 0.15f + 0.35f * static_cast<float>(0.5 + 0.5 * std::sin(seconds + 4.2));
             clear.color.float32[3] = 1.0f;
+            clears[1].depthStencil = {1.0f, 0};
             VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
             pass.renderPass = mPass;
             pass.framebuffer = mFrames.at(image);
             pass.renderArea.extent = mExtent;
-            pass.clearValueCount = 1;
-            pass.pClearValues = &clear;
+            pass.clearValueCount = mDepthEnabled ? 2 : 1;
+            pass.pClearValues = clears;
             vkCmdBeginRenderPass(mCommand, &pass, VK_SUBPASS_CONTENTS_INLINE);
-            if (mTriangle)
+            if (!mMode.clear())
             {
                 VkViewport viewport{0, 0, static_cast<float>(mExtent.width), static_cast<float>(mExtent.height), 0, 1};
                 VkRect2D scissor{{0, 0}, mExtent};
-                vkCmdBindPipeline(mCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipeline);
                 vkCmdSetViewport(mCommand, 0, 1, &viewport);
                 vkCmdSetScissor(mCommand, 0, 1, &scissor);
-                vkCmdDraw(mCommand, 3, 1, 0, 0);
+                if (mMode.cube())
+                    mCube.record(mCommand, smoke::cubeMvp(static_cast<float>(mExtent.width) / mExtent.height, seconds));
+                else
+                {
+                    vkCmdBindPipeline(mCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipeline);
+                    vkCmdDraw(mCommand, 3, 1, 0, 0);
+                }
             }
             vkCmdEndRenderPass(mCommand);
             check(vkEndCommandBuffer(mCommand), "vkEndCommandBuffer");
@@ -284,18 +293,26 @@ namespace
         void invalidateSurfaceSize() { mDirty = true; }
         uint64_t presents() const { return mPresents; }
         uint64_t recreations() const { return mRecreations; }
-        bool triangle() const { return mTriangle; }
-        bool triangleAvailable() const { return mTriangleAvailable; }
+        const char* modeLabel() const { return mMode.label(); }
+        bool geometryAvailable() const { return mMode.geometryAvailable(); }
+        bool cubeAvailable() const { return mMode.cubeAvailable(); }
         const smoke::FrameSample& frameSample() const { return mFrameSample; }
         uint64_t debugErrors() const { return mDebugErrors.load(); }
         uint64_t debugWarnings() const { return mDebugWarnings.load(); }
-        void toggleMode()
+        void toggleClear()
         {
-            if (!mTriangleAvailable) return;
-            // Create/destroy pipeline with the next render pass, before acquiring an image.
-            mTriangle = !mTriangle;
-            mDirty = true;
-            logLine(mTriangle ? "MODE: triangle" : "MODE: clear-only fallback (controller)");
+            if (!mMode.geometryAvailable()) return;
+            mMode.toggleClear();
+            // Only the first geometry frame after a --clear-only launch needs setup.
+            // Normal mode changes keep both pipelines/resources and avoid device-idle waits.
+            if (!mMode.clear() && !mPipeline) mDirty = true;
+            logLine(std::string("MODE: ") + mMode.label());
+        }
+        void toggleGeometry()
+        {
+            if (!mMode.cubeAvailable()) return;
+            mMode.toggleGeometry();
+            logLine(std::string("MODE: ") + mMode.label());
         }
 
         ~Renderer()
@@ -304,6 +321,7 @@ namespace
             {
                 vkDeviceWaitIdle(mDevice);
                 destroySwapchain();
+                mCube.destroy();
                 if (mFence) vkDestroyFence(mDevice, mFence, nullptr);
                 if (mAvailable) vkDestroySemaphore(mDevice, mAvailable, nullptr);
                 if (mPool) vkDestroyCommandPool(mDevice, mPool, nullptr);
@@ -371,6 +389,8 @@ namespace
                 attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
                 VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
                 blend.attachmentCount = 1; blend.pAttachments = &attachment;
+                VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+                // Triangle remains a flat draw; the compatible cube pass may have depth.
                 const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
                 VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
                 dynamic.dynamicStateCount = 2; dynamic.pDynamicStates = dynamicStates;
@@ -381,6 +401,7 @@ namespace
                 pipeline.pVertexInputState = &vertexInput; pipeline.pInputAssemblyState = &assembly;
                 pipeline.pViewportState = &viewport; pipeline.pRasterizationState = &raster;
                 pipeline.pMultisampleState = &samples; pipeline.pColorBlendState = &blend;
+                pipeline.pDepthStencilState = &depth;
                 pipeline.pDynamicState = &dynamic; pipeline.layout = mPipelineLayout;
                 pipeline.renderPass = mPass; pipeline.subpass = 0;
                 check(vkCreateGraphicsPipelines(mDevice, VK_NULL_HANDLE, 1, &pipeline, nullptr, &mPipeline), "vkCreateGraphicsPipelines");
@@ -493,6 +514,18 @@ namespace
         {
             quiesce();
             destroySwapchain();
+            mDepthEnabled = mMode.cubeAvailable() && !mMode.clear();
+            if (mDepthEnabled && !mCubeInitialized)
+            {
+                NSString* path = [NSBundle.mainBundle pathForResource:@"checkerboard" ofType:@"rgba"];
+                NSData* pixels = path ? [NSData dataWithContentsOfFile:path] : nil;
+                if (!pixels || pixels.length != 32 * 32 * 4)
+                    throw std::runtime_error("Missing/malformed 32x32 RGBA8 checkerboard resource");
+                mCube.initialize(mPhysical, mDevice, mQueue, mQueueFamily, mPool,
+                    static_cast<const uint8_t*>(pixels.bytes), pixels.length);
+                mCubeInitialized = true;
+                logLine("CUBE: immutable vertex/index buffers + 32x32 checker uploaded once; sampled RGBA8; no readback");
+            }
             VkSurfaceCapabilitiesKHR caps{};
             check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysical, mSurface, &caps), "surface capabilities");
             if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
@@ -541,7 +574,8 @@ namespace
             auto images = enumerate<VkImage>([&](auto* n, auto* p) {
                 return vkGetSwapchainImagesKHR(mDevice, mSwapchain, n, p);
             }, "swapchain images");
-            VkAttachmentDescription attachment{};
+            VkAttachmentDescription attachments[2]{};
+            auto& attachment = attachments[0];
             attachment.format = format.format;
             attachment.samples = VK_SAMPLE_COUNT_1_BIT;
             attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -550,31 +584,59 @@ namespace
             attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            if (mDepthEnabled)
+            {
+                auto& depth = attachments[1];
+                depth.format = mCube.depthFormat();
+                depth.samples = VK_SAMPLE_COUNT_1_BIT;
+                depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                depth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                depth.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                depth.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            }
             VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+            VkAttachmentReference depth{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
             VkSubpassDescription subpass{};
             subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
             subpass.colorAttachmentCount = 1;
             subpass.pColorAttachments = &color;
+            subpass.pDepthStencilAttachment = mDepthEnabled ? &depth : nullptr;
             VkSubpassDependency dependency{};
             dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
             dependency.dstSubpass = 0;
             dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            if (mDepthEnabled)
+            {
+                dependency.srcStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                dependency.dstStageMask = dependency.srcStageMask;
+                dependency.dstAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            }
             VkRenderPassCreateInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-            pass.attachmentCount = 1;
-            pass.pAttachments = &attachment;
+            pass.attachmentCount = mDepthEnabled ? 2 : 1;
+            pass.pAttachments = attachments;
             pass.subpassCount = 1;
             pass.pSubpasses = &subpass;
             pass.dependencyCount = 1;
             pass.pDependencies = &dependency;
             check(vkCreateRenderPass(mDevice, &pass, nullptr, &mPass), "vkCreateRenderPass");
-            if (mTriangle) createTrianglePipeline();
-            for (VkImage image : images)
+            if (!mMode.clear()) createTrianglePipeline();
+            if (mDepthEnabled)
+            {
+                mCube.createTargets(mPass, mExtent, static_cast<uint32_t>(images.size()), [&](const char* name) {
+                    return loadShader([NSString stringWithUTF8String:name]);
+                });
+                logLine("PIPELINE: cube ready; indexed 36; perspective/model/view; depth format="
+                    + std::to_string(mCube.depthFormat()) + "; per-image transient depth; sampled checker");
+            }
+            for (uint32_t index = 0; index < images.size(); ++index)
             {
                 VkImageView view = VK_NULL_HANDLE;
                 VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-                viewInfo.image = image;
+                viewInfo.image = images[index];
                 viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
                 viewInfo.format = format.format;
                 viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -583,8 +645,9 @@ namespace
                 VkFramebuffer frame = VK_NULL_HANDLE;
                 VkFramebufferCreateInfo frameInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
                 frameInfo.renderPass = mPass;
-                frameInfo.attachmentCount = 1;
-                frameInfo.pAttachments = &mViews.back();
+                const VkImageView frameAttachments[]{view, mDepthEnabled ? mCube.depthView(index) : VK_NULL_HANDLE};
+                frameInfo.attachmentCount = mDepthEnabled ? 2 : 1;
+                frameInfo.pAttachments = frameAttachments;
                 frameInfo.width = mExtent.width;
                 frameInfo.height = mExtent.height;
                 frameInfo.layers = 1;
@@ -602,7 +665,7 @@ namespace
             ++mRecreations;
             logLine("SWAPCHAIN: " + std::to_string(mExtent.width) + "x" + std::to_string(mExtent.height)
                 + "; images=" + std::to_string(images.size()) + "; format=" + std::to_string(format.format)
-                + "; FIFO; COLOR_ATTACHMENT only; no framebuffer readback");
+                + "; FIFO; swapchain COLOR_ATTACHMENT only; no framebuffer readback");
         }
 
         void destroySwapchain()
@@ -614,6 +677,8 @@ namespace
             for (auto view : mViews) vkDestroyImageView(mDevice, view, nullptr);
             for (auto semaphore : mPresentReady) vkDestroySemaphore(mDevice, semaphore, nullptr);
             mFrames.clear(); mViews.clear(); mPresentReady.clear();
+            // Framebuffers must release depth-view references before targets are destroyed.
+            mCube.destroyTargets();
             if (mPass) vkDestroyRenderPass(mDevice, mPass, nullptr);
             if (mSwapchain) vkDestroySwapchainKHR(mDevice, mSwapchain, nullptr);
             mPass = VK_NULL_HANDLE; mSwapchain = VK_NULL_HANDLE;
@@ -644,7 +709,9 @@ namespace
         uint64_t mPresents = 0;
         uint64_t mRecreations = 0;
         smoke::FrameSample mFrameSample;
-        bool mTriangleAvailable = false, mTriangle = false;
+        smoke::RenderMode mMode;
+        smoke::CubeResources mCube;
+        bool mDepthEnabled = false, mCubeInitialized = false;
         bool mDirty = true;
     };
 }
@@ -667,11 +734,12 @@ namespace
     UILabel* _status;
     BOOL _active;
     BOOL _failed;
-    CFTimeInterval _epoch;
+    CFTimeInterval _lastAnimationTick;
+    double _animationSeconds;
     CFTimeInterval _lastReport;
     smoke::FrameTiming _timing;
     GCController* _controller;
-    BOOL _toggleHeld;
+    BOOL _clearHeld, _geometryHeld;
     uint64_t _lastRecreation;
 }
 - (void)loadView
@@ -682,7 +750,7 @@ namespace
     layer.framebufferOnly = YES;
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     _status = [[UILabel alloc] initWithFrame:CGRectZero];
-    _status.text = @"Initializing Vulkan triangle + direct presentation...";
+    _status.text = @"Initializing Vulkan geometry + direct presentation...";
     _status.textColor = UIColor.whiteColor;
     _status.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
     _status.numberOfLines = 0;
@@ -699,7 +767,7 @@ namespace
     layer.drawableSize = CGSizeMake(std::round(self.view.bounds.size.width * scale), std::round(self.view.bounds.size.height * scale));
     CGRect safe = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
     _status.frame = CGRectMake(safe.origin.x + 8, safe.origin.y + 8, std::max<CGFloat>(1, safe.size.width - 16),
-        std::min<CGFloat>(180, std::max<CGFloat>(1, safe.size.height - 16)));
+        std::min<CGFloat>(205, std::max<CGFloat>(1, safe.size.height - 16)));
 }
 - (void)failWithMessage:(NSString*)message
 {
@@ -708,6 +776,16 @@ namespace
     _displayLink = nil;
     _status.text = [@"BLOCKED - rendering stopped\n" stringByAppendingString:message];
     logLine(std::string("BLOCKED: ") + message.UTF8String);
+}
+- (void)showCollectingStatus
+{
+    _status.text = [NSString stringWithFormat:
+        @"Vulkan -> MoltenVK -> CAMetalLayer | %@\n"
+        @"Requested refresh: 30 Hz | actual display FPS: unavailable\n"
+        @"Accepted presentations: %llu (API returns, not scanout)\n"
+        @"CPU timing: collecting a new two-second window\n"
+        @"DualShock 4: Triangle/Y clear | Square/X triangle/cube",
+        [NSString stringWithUTF8String:_renderer->modeLabel()], static_cast<unsigned long long>(_renderer->presents())];
 }
 - (void)resumeRendering
 {
@@ -727,20 +805,24 @@ namespace
             logLine("BEGIN: standalone iOS Vulkan smoke; 30 Hz request; no Mesa; no performance claim");
             logLine(std::string("OS: ") + UIDevice.currentDevice.systemVersion.UTF8String);
             NSString* mode = [NSBundle.mainBundle objectForInfoDictionaryKey:@"IOSRenderSmokeMode"];
-            if (![mode isEqualToString:@"triangle"] && ![mode isEqualToString:@"clear"])
+            if (![mode isEqualToString:@"triangle"] && ![mode isEqualToString:@"cube"] && ![mode isEqualToString:@"clear"])
                 throw std::runtime_error("Missing/invalid IOSRenderSmokeMode bundle metadata");
-            const bool triangleAvailable = [mode isEqualToString:@"triangle"];
+            const bool geometryAvailable = ![mode isEqualToString:@"clear"];
+            const bool triangleOnly = [NSProcessInfo.processInfo.arguments containsObject:@"--triangle-only"];
+            const bool cubeAvailable = [[NSBundle.mainBundle objectForInfoDictionaryKey:@"IOSRenderSmokeCubeAvailable"] boolValue] && !triangleOnly;
+            const bool startCube = [mode isEqualToString:@"cube"] && !triangleOnly;
             const bool clearOnly = [NSProcessInfo.processInfo.arguments containsObject:@"--clear-only"];
-            logLine(std::string("MODE: ") + (triangleAvailable && !clearOnly ? "triangle" : "clear-only baseline"));
+            logLine(std::string("MODE: ") + (!geometryAvailable || clearOnly ? "clear-only baseline" : startCube ? "textured cube" : "triangle"));
+            if (triangleOnly) logLine("BASELINE: --triangle-only disables cube/depth resources and cube selection");
             _renderer = std::make_unique<Renderer>();
-            _renderer->initialize((CAMetalLayer*)self.view.layer, triangleAvailable, clearOnly);
+            _renderer->initialize((CAMetalLayer*)self.view.layer, geometryAvailable, cubeAvailable, startCube, clearOnly);
         }
         _renderer->invalidateSurfaceSize();
-        _epoch = CACurrentMediaTime();
-        _lastReport = _epoch;
-        _timing.reset(_epoch);
+        _lastAnimationTick = CACurrentMediaTime();
+        _lastReport = _lastAnimationTick;
+        _timing.reset(_lastAnimationTick);
         _controller = nil;
-        _toggleHeld = YES; // require release after activation before toggling
+        _clearHeld = _geometryHeld = YES; // require release after activation before toggling
         _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(draw:)];
         _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 30, 30);
         [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
@@ -762,6 +844,7 @@ namespace
 }
 - (void)draw:(CADisplayLink*)link
 {
+    (void)link;
     if (!_active || _failed) return;
     try
     {
@@ -771,21 +854,38 @@ namespace
         if (_controller != selected)
         {
             _controller = selected;
-            _toggleHeld = YES; // a held button at connect must not switch mode
+            _clearHeld = _geometryHeld = YES; // held buttons at connect must not switch mode
             logLine(_controller ? std::string("CONTROLLER: ") + (_controller.vendorName.UTF8String ?: "extended gamepad")
                                 : "CONTROLLER: none; automatic smoke rendering continues");
         }
-        const BOOL toggle = _controller.extendedGamepad.buttonY.isPressed;
-        if (toggle && !_toggleHeld)
+        // GameController uses the same face positions as SDL's X/Y controller names:
+        // DualShock 4 Triangle is Y, and Square is X. No SDL/touch UI is introduced.
+        const BOOL clearPressed = _controller.extendedGamepad.buttonY.isPressed;
+        const BOOL geometryPressed = _controller.extendedGamepad.buttonX.isPressed;
+        bool modeChanged = false;
+        if (clearPressed && !_clearHeld)
         {
-            _renderer->toggleMode();
-            _timing.reset(CACurrentMediaTime());
+            _renderer->toggleClear();
+            modeChanged = true;
         }
-        _toggleHeld = toggle;
+        if (geometryPressed && !_geometryHeld)
+        {
+            _renderer->toggleGeometry();
+            modeChanged = true;
+        }
+        if (modeChanged)
+        {
+            _lastReport = CACurrentMediaTime();
+            _timing.reset(_lastReport);
+            [self showCollectingStatus];
+        }
+        _clearHeld = clearPressed;
+        _geometryHeld = geometryPressed;
         const double started = CACurrentMediaTime();
+        _animationSeconds += std::max(0.0, started - _lastAnimationTick);
+        _lastAnimationTick = started;
         CAMetalLayer* layer = (CAMetalLayer*)self.view.layer;
-        const double seconds = link.timestamp - _epoch;
-        const bool presented = _renderer->render(static_cast<uint32_t>(layer.drawableSize.width), static_cast<uint32_t>(layer.drawableSize.height), seconds);
+        const bool presented = _renderer->render(static_cast<uint32_t>(layer.drawableSize.width), static_cast<uint32_t>(layer.drawableSize.height), _animationSeconds);
         const double ended = CACurrentMediaTime();
         auto sample = _renderer->frameSample();
         sample.start = started; sample.end = ended; sample.presented = presented;
@@ -795,6 +895,7 @@ namespace
             // Exclude startup/resize/pipeline compilation from steady pacing statistics.
             _timing.reset(ended);
             _lastReport = ended;
+            [self showCollectingStatus];
             logLine("TIMING: reset after swapchain recreation; CPU setup ms=" + std::to_string((ended - started) * 1000.0));
         }
         else _timing.add(sample);
@@ -804,20 +905,22 @@ namespace
             const auto thermal = NSProcessInfo.processInfo.thermalState;
             NSString* message = [NSString stringWithFormat:
                 @"Vulkan -> MoltenVK -> CAMetalLayer | %@\n"
-                @"Present calls: %llu | 30 Hz requested (not measured FPS)\n"
+                @"Requested refresh: 30 Hz | actual display FPS: unavailable\n"
+                @"Accepted presentations: %llu (API returns, not scanout)\n"
                 @"CPU callbacks %.1f Hz | accepted presents %.1f/s\n"
                 @"Callback interval mean/max %.1f/%.1f ms | >50ms: %llu\n"
                 @"CPU render mean/max %.2f/%.2f ms | skipped: %llu\n"
                 @"Fence/acquire/present per-callback mean %.2f/%.2f/%.2f ms\n"
                 @"Debug warn/error %llu/%llu | thermal %ld | %@",
-                _renderer->triangle() ? @"TRIANGLE" : @"CLEAR ONLY",
+                [NSString stringWithUTF8String:_renderer->modeLabel()],
                 static_cast<unsigned long long>(_renderer->presents()),
                 _timing.callbackHz(ended), _timing.presentsPerSecond(ended),
                 _timing.intervalMeanMs(), _timing.intervalMaxMs(), static_cast<unsigned long long>(_timing.slowIntervals()),
                 _timing.cpuMeanMs(), _timing.cpuMaxMs(), static_cast<unsigned long long>(_timing.skipped()),
                 _timing.fenceMeanMs(), _timing.acquireMeanMs(), _timing.presentMeanMs(),
                 static_cast<unsigned long long>(_renderer->debugWarnings()), static_cast<unsigned long long>(_renderer->debugErrors()),
-                static_cast<long>(thermal), _controller ? (_renderer->triangleAvailable() ? @"Y: triangle/clear" : @"controller; clear build")
+                static_cast<long>(thermal), _controller ? (_renderer->cubeAvailable() ? @"Triangle/Y: clear | Square/X: geometry"
+                    : _renderer->geometryAvailable() ? @"Triangle/Y: clear" : @"controller; clear build")
                                                        : @"controller: none"];
             _status.text = message;
             logLine(message.UTF8String);

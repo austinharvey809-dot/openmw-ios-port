@@ -17,9 +17,21 @@ set(SMOKE_BUNDLE_ID "org.openmw.experiments.ios-render-smoke" CACHE STRING "Own 
 set(SMOKE_DEVELOPMENT_TEAM "" CACHE STRING "Apple development team, needed for a signed device build")
 option(SMOKE_UNSIGNED "Compile an unsigned device app; cannot install until signed" OFF)
 option(SMOKE_CLEAR_ONLY "Build the original clear-only fallback without shaders" OFF)
-set(SMOKE_RENDER_MODE "triangle")
+option(SMOKE_TRIANGLE_ONLY "Build an independent triangle fallback without cube shaders or resources" OFF)
+set(SMOKE_START_MODE "cube" CACHE STRING "Initial geometry mode: cube or triangle")
+set_property(CACHE SMOKE_START_MODE PROPERTY STRINGS cube triangle)
+if(NOT SMOKE_START_MODE MATCHES "^(cube|triangle)$")
+    message(FATAL_ERROR "SMOKE_START_MODE must be cube or triangle.")
+endif()
+set(SMOKE_RENDER_MODE "${SMOKE_START_MODE}")
+set(SMOKE_CUBE_AVAILABLE true)
+if(SMOKE_TRIANGLE_ONLY)
+    set(SMOKE_RENDER_MODE "triangle")
+    set(SMOKE_CUBE_AVAILABLE false)
+endif()
 if(SMOKE_CLEAR_ONLY)
     set(SMOKE_RENDER_MODE "clear")
+    set(SMOKE_CUBE_AVAILABLE false)
 endif()
 if(NOT IS_DIRECTORY "${MOLTENVK_ROOT}")
     message(FATAL_ERROR "Supply -DMOLTENVK_ROOT=/absolute/path/to/existing/distribution. Configuration downloads nothing.")
@@ -48,22 +60,40 @@ if(NOT SMOKE_CLEAR_ONLY)
     endif()
     message(STATUS "Host shader compiler: ${SMOKE_GLSLANG_VALIDATOR}\n${_shader_version}")
     set(_smoke_shaders)
-    foreach(_stage vert frag)
-        set(_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.${_stage}")
-        set(_output "${CMAKE_CURRENT_BINARY_DIR}/shaders/triangle.${_stage}.spv")
-        add_custom_command(OUTPUT "${_output}"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
-            COMMAND "${SMOKE_GLSLANG_VALIDATOR}" -V --target-env vulkan1.0
-                -S "${_stage}" -e main -o "${_output}" "${_source}"
-            DEPENDS "${_source}" "${SMOKE_GLSLANG_VALIDATOR}"
-            COMMENT "Compile triangle.${_stage} to SPIR-V 1.0" VERBATIM)
-        set_source_files_properties("${_output}" PROPERTIES
-            GENERATED TRUE HEADER_FILE_ONLY TRUE MACOSX_PACKAGE_LOCATION Resources)
-        list(APPEND _smoke_shaders "${_output}")
+    set(_smoke_geometry_modes triangle)
+    if(NOT SMOKE_TRIANGLE_ONLY)
+        list(APPEND _smoke_geometry_modes cube)
+    endif()
+    foreach(_mode IN LISTS _smoke_geometry_modes)
+        foreach(_stage vert frag)
+            set(_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${_mode}.${_stage}")
+            set(_output "${CMAKE_CURRENT_BINARY_DIR}/shaders/${_mode}.${_stage}.spv")
+            add_custom_command(OUTPUT "${_output}"
+                COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+                COMMAND "${SMOKE_GLSLANG_VALIDATOR}" -V --target-env vulkan1.0
+                    -S "${_stage}" -e main -o "${_output}" "${_source}"
+                DEPENDS "${_source}" "${SMOKE_GLSLANG_VALIDATOR}"
+                COMMENT "Compile ${_mode}.${_stage} to SPIR-V 1.0" VERBATIM)
+            set_source_files_properties("${_output}" PROPERTIES
+                GENERATED TRUE HEADER_FILE_ONLY TRUE MACOSX_PACKAGE_LOCATION Resources)
+            list(APPEND _smoke_shaders "${_output}")
+        endforeach()
     endforeach()
-    add_custom_target(IOSRenderSmokeShaders DEPENDS ${_smoke_shaders})
+    set(_smoke_assets)
+    if(NOT SMOKE_TRIANGLE_ONLY)
+        set(_checkerboard "${CMAKE_CURRENT_BINARY_DIR}/assets/checkerboard.rgba")
+        add_custom_command(OUTPUT "${_checkerboard}"
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_checkerboard.py"
+                --output "${_checkerboard}"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_checkerboard.py"
+            COMMENT "Generate original 32x32 RGBA8 checkerboard" VERBATIM)
+        set_source_files_properties("${_checkerboard}" PROPERTIES
+            GENERATED TRUE HEADER_FILE_ONLY TRUE MACOSX_PACKAGE_LOCATION Resources)
+        list(APPEND _smoke_assets "${_checkerboard}")
+    endif()
+    add_custom_target(IOSRenderSmokeShaders DEPENDS ${_smoke_shaders} ${_smoke_assets})
     add_dependencies(IOSRenderSmoke IOSRenderSmokeShaders)
-    target_sources(IOSRenderSmoke PRIVATE ${_smoke_shaders})
+    target_sources(IOSRenderSmoke PRIVATE ${_smoke_shaders} ${_smoke_assets})
 endif()
 target_compile_features(IOSRenderSmoke PRIVATE cxx_std_17)
 set_target_properties(IOSRenderSmoke PROPERTIES
