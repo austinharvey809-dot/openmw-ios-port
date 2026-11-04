@@ -1,0 +1,127 @@
+name: iOS Zink Vulkan capability audit (compile only)
+
+# Push bootstraps ios-port; manual dispatch additionally needs default-branch registration.
+on:
+  push:
+    branches: [ios-port]
+    paths:
+      - experiments/ios-zink-caps/**
+      - experiments/ios-render-smoke/tools/resolve_moltenvk.py
+      - .github/workflows/ios-zink-caps.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-device-app:
+    if: github.ref == 'refs/heads/ios-port'
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPERIMENT: experiments/ios-zink-caps
+      MOLTENVK_SHA256: b5d947b1660e6e9fed40b9cd2387e160aaab9e80b775c0cef7e14059405178c1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Record source and Apple toolchain
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXPERIMENT/artifacts"
+          {
+            git rev-parse HEAD
+            sw_vers
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-path
+            xcrun --sdk iphoneos clang --version
+            cmake --version
+            python3 --version
+            printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$EXPERIMENT/artifacts/toolchain.log"
+          cp "$EXPERIMENT/data/mesa-25.1.9-requirements.json" "$EXPERIMENT/artifacts/"
+
+      - name: Host comparison, packaging and dependency resolver tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s "$EXPERIMENT/tools" -p 'test_*.py' -v \
+            2>&1 | tee "$EXPERIMENT/artifacts/caps-tests.log"
+          python3 -m unittest discover -s experiments/ios-render-smoke/tools -p 'test_resolve_moltenvk.py' -v \
+            2>&1 | tee "$EXPERIMENT/artifacts/resolver-tests.log"
+
+      - name: Native comparison evaluator parity tests (no iPhone execution)
+        run: |
+          set -euo pipefail
+          xcrun clang++ -std=c++17 -Wall -Wextra -Werror -fobjc-arc \
+            -framework Foundation -framework CoreFoundation \
+            "$EXPERIMENT/src/Audit.mm" "$EXPERIMENT/tests/audit_cli.mm" \
+            -I"$EXPERIMENT/src" -o "$RUNNER_TEMP/caps-audit"
+          python3 "$EXPERIMENT/tools/check_native_audit.py" --native "$RUNNER_TEMP/caps-audit" \
+            2>&1 | tee "$EXPERIMENT/artifacts/native-audit-tests.log"
+
+      - name: Fetch only the pinned public iOS MoltenVK release
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/MoltenVK-ios-1.4.2.tar"
+          curl --fail --location --retry 3 \
+            https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-ios.tar \
+            --output "$archive"
+          printf '%s  %s\n' "$MOLTENVK_SHA256" "$archive" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/moltenvk-ios"
+          tar -xf "$archive" -C "$RUNNER_TEMP/moltenvk-ios"
+          printf 'MoltenVK v1.4.2 iOS release\nArchive SHA-256: %s\nNo Mesa source or binaries fetched.\n' \
+            "$MOLTENVK_SHA256" > "$EXPERIMENT/artifacts/dependency.txt"
+
+      - name: Configure independent ARM64 query application
+        run: |
+          set -euo pipefail
+          cmake -S "$EXPERIMENT" -B "$EXPERIMENT/build" -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DMOLTENVK_ROOT="$RUNNER_TEMP/moltenvk-ios" -DCAPS_UNSIGNED=ON \
+            2>&1 | tee "$EXPERIMENT/artifacts/configure.log"
+          cp "$EXPERIMENT/build/moltenvk-resolved.cmake" "$EXPERIMENT/artifacts/"
+
+      - name: Compile unsigned iOS device app
+        run: |
+          set -euo pipefail
+          cmake --build "$EXPERIMENT/build" --config Release --target IOSZinkCaps -- \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$EXPERIMENT/artifacts/build.log"
+
+      - name: Inspect device app and package unsigned IPA
+        run: |
+          set -euo pipefail
+          app=$(find "$EXPERIMENT/build" -type d -name IOSZinkCaps.app -print -quit)
+          test -n "$app"
+          APP_BIN="$app/IOSZinkCaps"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist"
+          xcrun lipo -info "$APP_BIN" | tee "$EXPERIMENT/artifacts/architecture.log"
+          xcrun lipo "$APP_BIN" -verify_arch arm64
+          test "$(xcrun lipo -archs "$APP_BIN")" = arm64
+          xcrun vtool -show-build "$APP_BIN" > "$EXPERIMENT/artifacts/platform.log"
+          grep -Eq '^[[:space:]]*platform[[:space:]]+IOS[[:space:]]*$' "$EXPERIMENT/artifacts/platform.log"
+          xcrun otool -L "$APP_BIN" > "$EXPERIMENT/artifacts/linkage.log"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$EXPERIMENT/artifacts/IOSZinkCaps-unsigned.app.zip"
+          dsym=$(find "$EXPERIMENT/build" -type d -name IOSZinkCaps.app.dSYM -print -quit)
+          if [ -n "$dsym" ]; then
+            ditto -c -k --sequesterRsrc --keepParent "$dsym" "$EXPERIMENT/artifacts/IOSZinkCaps.dSYM.zip"
+          fi
+          python3 "$EXPERIMENT/tools/package_ios.py" --app "$app" \
+            --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            --output "$EXPERIMENT/artifacts/IOSZinkCaps-unsigned.ipa" \
+            --report "$EXPERIMENT/artifacts/ipa-validation.json" \
+            2>&1 | tee "$EXPERIMENT/artifacts/ipa-validation.log"
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-zink-caps-compile-${{ github.sha }}
+          path: experiments/ios-zink-caps/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
