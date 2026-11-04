@@ -1,0 +1,108 @@
+name: iOS direct Vulkan render smoke (compile only)
+
+# A branch push can bootstrap this workflow before it exists on the default branch.
+# No workflow runs until these local files are committed/pushed to GitHub.
+on:
+  push:
+    branches: [ios-port]
+    paths:
+      - experiments/ios-render-smoke/**
+      - .github/workflows/ios-render-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-device-app:
+    if: github.ref == 'refs/heads/ios-port'
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPERIMENT: experiments/ios-render-smoke
+      MOLTENVK_SHA256: b5d947b1660e6e9fed40b9cd2387e160aaab9e80b775c0cef7e14059405178c1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain and source
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXPERIMENT/artifacts"
+          {
+            git rev-parse HEAD
+            sw_vers
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-path
+            xcrun --sdk iphoneos clang --version
+            cmake --version
+            python3 --version
+            printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$EXPERIMENT/artifacts/toolchain.log"
+
+      - name: Host dependency-resolver tests (no Apple execution)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s "$EXPERIMENT/tools" -p test_resolve_moltenvk.py -v \
+            2>&1 | tee "$EXPERIMENT/artifacts/resolver-tests.log"
+
+      - name: Fetch only the pinned public iOS MoltenVK release
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/MoltenVK-ios-1.4.2.tar"
+          curl --fail --location --retry 3 \
+            https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-ios.tar \
+            --output "$archive"
+          printf '%s  %s\n' "$MOLTENVK_SHA256" "$archive" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/moltenvk-ios"
+          tar -xf "$archive" -C "$RUNNER_TEMP/moltenvk-ios"
+          printf 'MoltenVK v1.4.2 iOS release\nArchive SHA-256: %s\n' "$MOLTENVK_SHA256" \
+            > "$EXPERIMENT/artifacts/dependency.txt"
+
+      - name: Configure the independent device app
+        run: |
+          set -euo pipefail
+          cmake -S "$EXPERIMENT" -B "$EXPERIMENT/build" -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DMOLTENVK_ROOT="$RUNNER_TEMP/moltenvk-ios" -DSMOKE_UNSIGNED=ON \
+            2>&1 | tee "$EXPERIMENT/artifacts/configure.log"
+          cp "$EXPERIMENT/build/moltenvk-resolved.cmake" "$EXPERIMENT/artifacts/"
+
+      - name: Compile unsigned generic-device app
+        run: |
+          set -euo pipefail
+          cmake --build "$EXPERIMENT/build" --config Release --target IOSRenderSmoke -- \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$EXPERIMENT/artifacts/build.log"
+
+      - name: Package compile evidence (not an installable signed app)
+        run: |
+          set -euo pipefail
+          app=$(find "$EXPERIMENT/build" -type d -name IOSRenderSmoke.app -print -quit)
+          test -n "$app"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist"
+          xcrun lipo -info "$app/IOSRenderSmoke" | tee "$EXPERIMENT/artifacts/architecture.log"
+          xcrun lipo -verify_arch arm64 "$app/IOSRenderSmoke"
+          test "$(xcrun lipo -archs "$app/IOSRenderSmoke")" = arm64
+          xcrun vtool -show-build "$app/IOSRenderSmoke" > "$EXPERIMENT/artifacts/platform.log"
+          grep -Eq '^[[:space:]]*platform[[:space:]]+IOS[[:space:]]*$' "$EXPERIMENT/artifacts/platform.log"
+          xcrun otool -L "$app/IOSRenderSmoke" > "$EXPERIMENT/artifacts/linkage.log"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$EXPERIMENT/artifacts/IOSRenderSmoke-unsigned.app.zip"
+          dsym=$(find "$EXPERIMENT/build" -type d -name IOSRenderSmoke.app.dSYM -print -quit)
+          if [ -n "$dsym" ]; then
+            ditto -c -k --sequesterRsrc --keepParent "$dsym" "$EXPERIMENT/artifacts/IOSRenderSmoke.dSYM.zip"
+          fi
+
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-render-smoke-compile-${{ github.sha }}
+          path: experiments/ios-render-smoke/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
