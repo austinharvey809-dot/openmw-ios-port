@@ -43,7 +43,15 @@ def binary(*, filetype=2, dependencies=(), rpaths=(), install_name=None,
     return struct.pack("<IiiIIIII", 0xFEEDFACF, cpu, 0, filetype, len(commands), len(payload), 0, 0) + payload
 
 
-def bundle(*, dependencies=(), rpaths=()):
+def shader(stage=0):
+    # Bounded packaging fixture only; not a runnable shader program.
+    words = [0x07230203, 0x00010000, 0, 2, 0,
+             (2 << 16) | 17, 1, (3 << 16) | 14, 0, 1,
+             (5 << 16) | 15, stage, 1, 0x6E69616D, 0]
+    return struct.pack(f"<{len(words)}I", *words)
+
+
+def bundle(*, dependencies=(), rpaths=(), mode="clear"):
     info = {
         "CFBundleExecutable": "IOSRenderSmoke",
         "CFBundleIdentifier": "org.openmw.experiments.ios-render-smoke",
@@ -51,6 +59,7 @@ def bundle(*, dependencies=(), rpaths=()):
         "CFBundleSupportedPlatforms": ["iPhoneOS"],
         "UIDeviceFamily": [1],
         "MinimumOSVersion": "18.0",
+        "IOSRenderSmokeMode": mode,
         "UILaunchScreen": {},
         "UIApplicationSceneManifest": {
             "UISceneConfigurations": {
@@ -58,10 +67,14 @@ def bundle(*, dependencies=(), rpaths=()):
             }
         },
     }
-    return {
+    files = {
         "Info.plist": Entry(plistlib.dumps(info), REGULAR),
         "IOSRenderSmoke": Entry(binary(dependencies=dependencies, rpaths=rpaths), EXECUTABLE),
     }
+    if mode == "triangle":
+        files.update({"triangle.vert.spv": Entry(shader(0), REGULAR),
+                      "triangle.frag.spv": Entry(shader(4), REGULAR)})
+    return files
 
 
 class PackageIOSTests(unittest.TestCase):
@@ -94,11 +107,55 @@ class PackageIOSTests(unittest.TestCase):
                 info.external_attr = source.mode << 16
                 archive.writestr(info, source.data)
 
-    def test_valid_bundle_requires_no_external_shader_resources(self):
+    def test_clear_fallback_requires_no_external_shader_resources(self):
         report = validate_bundle(bundle())
         self.assertEqual(report["required_resources"], ["Info.plist", "IOSRenderSmoke"])
         self.assertEqual(report["architecture"], "arm64")
         self.assertFalse(report["sdk_availability_checked"])
+        self.assertEqual(report["render_mode"], "clear")
+
+    def test_triangle_requires_stage_specific_shaders_and_round_trips_ipa(self):
+        files = bundle(mode="triangle")
+        ipa = self.root / "triangle.ipa"
+        write_ipa(files, ipa)
+        report = validate_ipa(ipa, expected=files)
+        self.assertEqual(report["render_mode"], "triangle")
+        self.assertEqual(report["required_resources"],
+                         ["Info.plist", "IOSRenderSmoke", "triangle.vert.spv", "triangle.frag.spv"])
+        self.assertEqual(report["shaders"]["triangle.frag.spv"]["stage"], "fragment")
+        self.assertEqual(report["shaders"]["triangle.vert.spv"]["sha256"], hashlib.sha256(shader(0)).hexdigest())
+
+    def test_triangle_missing_shader_is_not_packaged_as_clear_fallback(self):
+        for name in ("triangle.vert.spv", "triangle.frag.spv"):
+            with self.subTest(name=name):
+                files = bundle(mode="triangle")
+                del files[name]
+                with self.assertRaisesRegex(ValidationError, "Missing required triangle shader"):
+                    validate_bundle(files)
+
+    def test_triangle_rejects_corrupt_and_wrong_stage_shader_resources(self):
+        for data in (b"not SPIR-V", shader(4), shader(0)[:-4],
+                     shader(0)[:4] + struct.pack("<I", 0x00010600) + shader(0)[8:],
+                     shader(0) + struct.pack("<I", 0),
+                     shader(0).replace(b"main", b"draw")):
+            with self.subTest(data=data):
+                files = bundle(mode="triangle")
+                files["triangle.vert.spv"] = Entry(data, REGULAR)
+                with self.assertRaisesRegex(ValidationError, "SPIR-V|entry point"):
+                    validate_bundle(files)
+
+    def test_render_mode_must_be_explicit_and_known(self):
+        for mode in (None, "simulator", True, []):
+            with self.subTest(mode=mode):
+                files = bundle()
+                info = plistlib.loads(files["Info.plist"].data)
+                if mode is None:
+                    del info["IOSRenderSmokeMode"]
+                else:
+                    info["IOSRenderSmokeMode"] = mode
+                files["Info.plist"] = Entry(plistlib.dumps(info), REGULAR)
+                with self.assertRaisesRegex(ValidationError, "IOSRenderSmokeMode"):
+                    validate_bundle(files)
 
     def test_ipa_round_trip_preserves_payload_permissions_contents_and_hash(self):
         files = bundle()

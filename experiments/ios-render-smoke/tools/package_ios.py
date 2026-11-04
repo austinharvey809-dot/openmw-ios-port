@@ -333,6 +333,37 @@ def expand_path(value: str, loader: str, allow_root=False):
     raise ValidationError(f"Unsupported/non-bundled runpath: {value}")
 
 
+def spirv_metadata(data: bytes, stage: int, name: str):
+    """Check resource identity/structure, not full SPIR-V semantic validity."""
+    require(20 <= len(data) <= 1024 * 1024 and len(data) % 4 == 0,
+            f"Invalid SPIR-V size/alignment: {name}")
+    words = struct.unpack(f"<{len(data) // 4}I", data)
+    require(words[0] == 0x07230203 and words[1] == 0x00010000 and words[3] > 0 and words[4] == 0,
+            f"Expected little-endian SPIR-V 1.0 header: {name}")
+    entries, shader, memory_model = [], False, False
+    index = 5
+    while index < len(words):
+        count, opcode = words[index] >> 16, words[index] & 0xFFFF
+        require(count > 0 and index + count <= len(words), f"Malformed SPIR-V instruction: {name}")
+        instruction = words[index:index + count]
+        if opcode == 17:  # OpCapability Shader
+            require(count == 2, f"Malformed SPIR-V capability: {name}")
+            shader |= instruction[1] == 1
+        elif opcode == 14:  # OpMemoryModel Logical GLSL450
+            require(count == 3, f"Malformed SPIR-V memory model: {name}")
+            memory_model |= instruction[1:] == (0, 1)
+        elif opcode == 15:  # OpEntryPoint execution model, id, null-terminated name
+            require(count >= 4, f"Malformed SPIR-V entry point: {name}")
+            encoded = struct.pack(f"<{count - 3}I", *instruction[3:])
+            require(b"\0" in encoded, f"Unterminated SPIR-V entry point: {name}")
+            entries.append((instruction[1], encoded.split(b"\0", 1)[0]))
+        index += count
+    require(shader and memory_model and entries == [(stage, b"main")],
+            f"Expected Shader capability, Logical GLSL450 and stage {stage} main entry point: {name}")
+    return {"stage": "vertex" if stage == 0 else "fragment", "entry_point": "main",
+            "spirv_version": "1.0", "sha256": hashlib.sha256(data).hexdigest()}
+
+
 def validate_bundle(files: dict[str, Entry], sdk: Path | None = None):
     require("Info.plist" in files, "Missing application Info.plist")
     for name, entry in files.items():
@@ -358,7 +389,15 @@ def validate_bundle(files: dict[str, Entry], sdk: Path | None = None):
             "Bundle is not an iPhoneOS/iPhone application")
     minimum_os = version_tuple(info.get("MinimumOSVersion"))
     require(isinstance(info.get("UILaunchScreen"), dict), "Missing inline launch-screen resource configuration")
-    require(not any(key in info for key in ("UIMainStoryboardFile", "UILaunchStoryboardName")), "External storyboard resources are not part of this clear-only experiment")
+    require(not any(key in info for key in ("UIMainStoryboardFile", "UILaunchStoryboardName")), "External storyboard resources are not part of this experiment")
+    mode = info.get("IOSRenderSmokeMode")
+    require(mode in ("triangle", "clear"), "Missing/invalid IOSRenderSmokeMode (expected triangle or clear)")
+    required_resources, shaders = ["Info.plist", executable], {}
+    if mode == "triangle":
+        for name, stage in (("triangle.vert.spv", 0), ("triangle.frag.spv", 4)):
+            require(name in files, f"Missing required triangle shader resource: {name}")
+            shaders[name] = spirv_metadata(files[name].data, stage, name)
+            required_resources.append(name)
     manifest = info.get("UIApplicationSceneManifest", {})
     require(isinstance(manifest, dict), "Invalid scene manifest")
     configurations = manifest.get("UISceneConfigurations", {})
@@ -413,8 +452,8 @@ def validate_bundle(files: dict[str, Entry], sdk: Path | None = None):
     require(reachable == set(binaries), "Unreferenced native libraries in bundle are not permitted")
     return {"bundle_identifier": info["CFBundleIdentifier"], "executable": executable,
             "minimum_os": info["MinimumOSVersion"], "architecture": "arm64", "platform": "IOS",
-            "required_resources": ["Info.plist", executable],
-            "resource_note": "Launch screen and scene configuration inline; no shaders/metallib/game assets required.",
+            "render_mode": mode, "required_resources": required_resources, "shaders": shaders,
+            "resource_note": "Inline launch/scene configuration; triangle mode requires both SPIR-V resources. Structural checks do not replace SPIR-V semantic validation or a device draw.",
             "binaries": binaries, "dependencies": resolved, "sdk_availability_checked": sdk is not None}
 
 

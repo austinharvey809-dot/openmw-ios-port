@@ -3,14 +3,18 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
+#import <GameController/GameController.h>
 
 #include <vulkan/vulkan.h>
+#include "FrameTiming.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -18,9 +22,11 @@
 namespace
 {
     FILE* logFile = nullptr;
+    std::mutex logMutex;
 
     void logLine(const std::string& message)
     {
+        const std::lock_guard<std::mutex> lock(logMutex);
         NSLog(@"%s", message.c_str());
         if (logFile)
         {
@@ -69,8 +75,10 @@ namespace
     class Renderer
     {
     public:
-        void initialize(CAMetalLayer* layer)
+        void initialize(CAMetalLayer* layer, bool triangleAvailable, bool clearOnly)
         {
+            mTriangleAvailable = triangleAvailable;
+            mTriangle = triangleAvailable && !clearOnly;
             uint32_t loaderVersion = VK_API_VERSION_1_0;
             check(vkEnumerateInstanceVersion(&loaderVersion), "vkEnumerateInstanceVersion");
             if (loaderVersion < VK_API_VERSION_1_1)
@@ -85,6 +93,18 @@ namespace
                     throw std::runtime_error(std::string("Missing required instance extension: ") + name);
 
             VkInstanceCreateInfo instanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+            VkDebugUtilsMessengerCreateInfoEXT debugInfo{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+            const bool debugAvailable = has(extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            if (debugAvailable)
+            {
+                enabled.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+                debugInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+                debugInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
+                    | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+                debugInfo.pfnUserCallback = debugCallback;
+                debugInfo.pUserData = this;
+                instanceInfo.pNext = &debugInfo;
+            }
             if (has(extensions, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME))
             {
                 enabled.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
@@ -98,6 +118,15 @@ namespace
             instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabled.size());
             instanceInfo.ppEnabledExtensionNames = enabled.data();
             check(vkCreateInstance(&instanceInfo, nullptr, &mInstance), "vkCreateInstance");
+            if (debugAvailable)
+            {
+                auto createDebug = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mInstance, "vkCreateDebugUtilsMessengerEXT"));
+                mDestroyDebug = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(mInstance, "vkDestroyDebugUtilsMessengerEXT"));
+                if (!createDebug || !mDestroyDebug) throw std::runtime_error("Advertised debug utils entry points unavailable");
+                check(createDebug(mInstance, &debugInfo, nullptr, &mDebug), "vkCreateDebugUtilsMessengerEXT");
+            }
+            logLine(debugAvailable ? "DEBUG: warning/error messenger enabled; no validation layer bundled"
+                                   : "DEBUG: VK_EXT_debug_utils unavailable; VkResult checks remain active");
             VkMetalSurfaceCreateInfoEXT surfaceInfo{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
             surfaceInfo.pLayer = layer;
             check(vkCreateMetalSurfaceEXT(mInstance, &surfaceInfo, nullptr, &mSurface), "vkCreateMetalSurfaceEXT");
@@ -146,7 +175,7 @@ namespace
             deviceInfo.pQueueCreateInfos = &queueInfo;
             deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceEnabled.size());
             deviceInfo.ppEnabledExtensionNames = deviceEnabled.data();
-            // No optional device features, descriptor indexing, shader compiler or Mesa required.
+            // No optional device features, runtime shader compiler or Mesa required.
             check(vkCreateDevice(mPhysical, &deviceInfo, nullptr, &mDevice), "vkCreateDevice");
             vkGetDeviceQueue(mDevice, mQueueFamily, 0, &mQueue);
             VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
@@ -168,13 +197,18 @@ namespace
 
         bool render(uint32_t width, uint32_t height, double seconds)
         {
+            mFrameSample = {};
             if (!width || !height)
                 return false;
             if (mDirty || width != mRequestedWidth || height != mRequestedHeight)
                 recreate(width, height);
+            double started = CACurrentMediaTime();
             check(vkWaitForFences(mDevice, 1, &mFence, VK_TRUE, 1000000000ull), "submit fence wait (1s)");
+            mFrameSample.fenceMs = (CACurrentMediaTime() - started) * 1000.0;
             uint32_t image = 0;
+            started = CACurrentMediaTime();
             VkResult acquire = vkAcquireNextImageKHR(mDevice, mSwapchain, 100000000ull, mAvailable, VK_NULL_HANDLE, &image);
+            mFrameSample.acquireMs = (CACurrentMediaTime() - started) * 1000.0;
             if (acquire == VK_TIMEOUT || acquire == VK_NOT_READY)
                 return false;
             if (acquire == VK_ERROR_OUT_OF_DATE_KHR)
@@ -201,6 +235,15 @@ namespace
             pass.clearValueCount = 1;
             pass.pClearValues = &clear;
             vkCmdBeginRenderPass(mCommand, &pass, VK_SUBPASS_CONTENTS_INLINE);
+            if (mTriangle)
+            {
+                VkViewport viewport{0, 0, static_cast<float>(mExtent.width), static_cast<float>(mExtent.height), 0, 1};
+                VkRect2D scissor{{0, 0}, mExtent};
+                vkCmdBindPipeline(mCommand, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipeline);
+                vkCmdSetViewport(mCommand, 0, 1, &viewport);
+                vkCmdSetScissor(mCommand, 0, 1, &scissor);
+                vkCmdDraw(mCommand, 3, 1, 0, 0);
+            }
             vkCmdEndRenderPass(mCommand);
             check(vkEndCommandBuffer(mCommand), "vkEndCommandBuffer");
             const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -220,7 +263,9 @@ namespace
             present.swapchainCount = 1;
             present.pSwapchains = &mSwapchain;
             present.pImageIndices = &image;
+            started = CACurrentMediaTime();
             VkResult result = vkQueuePresentKHR(mQueue, &present);
+            mFrameSample.presentMs = (CACurrentMediaTime() - started) * 1000.0;
             if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || acquire == VK_SUBOPTIMAL_KHR)
                 mDirty = true;
             if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR)
@@ -238,6 +283,20 @@ namespace
         }
         void invalidateSurfaceSize() { mDirty = true; }
         uint64_t presents() const { return mPresents; }
+        uint64_t recreations() const { return mRecreations; }
+        bool triangle() const { return mTriangle; }
+        bool triangleAvailable() const { return mTriangleAvailable; }
+        const smoke::FrameSample& frameSample() const { return mFrameSample; }
+        uint64_t debugErrors() const { return mDebugErrors.load(); }
+        uint64_t debugWarnings() const { return mDebugWarnings.load(); }
+        void toggleMode()
+        {
+            if (!mTriangleAvailable) return;
+            // Create/destroy pipeline with the next render pass, before acquiring an image.
+            mTriangle = !mTriangle;
+            mDirty = true;
+            logLine(mTriangle ? "MODE: triangle" : "MODE: clear-only fallback (controller)");
+        }
 
         ~Renderer()
         {
@@ -251,10 +310,94 @@ namespace
                 vkDestroyDevice(mDevice, nullptr);
             }
             if (mSurface) vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
+            if (mDebug) mDestroyDebug(mInstance, mDebug, nullptr);
             if (mInstance) vkDestroyInstance(mInstance, nullptr);
         }
 
     private:
+        static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+            VkDebugUtilsMessageTypeFlagsEXT, const VkDebugUtilsMessengerCallbackDataEXT* data, void* user) noexcept
+        {
+            auto* renderer = static_cast<Renderer*>(user);
+            if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) ++renderer->mDebugErrors;
+            else ++renderer->mDebugWarnings;
+            // Driver callbacks may run on another thread. Do not throw or call Vulkan here.
+            try { logLine(std::string("VULKAN DEBUG: ") + (data && data->pMessage ? data->pMessage : "(no message)")); }
+            catch (...) {}
+            return VK_FALSE;
+        }
+
+        VkShaderModule loadShader(NSString* name)
+        {
+            NSString* path = [NSBundle.mainBundle pathForResource:name ofType:@"spv"];
+            NSData* data = path ? [NSData dataWithContentsOfFile:path] : nil;
+            if (!data || data.length < 20 || data.length % sizeof(uint32_t))
+                throw std::runtime_error(std::string("Missing/malformed SPIR-V resource: ") + name.UTF8String);
+            std::vector<uint32_t> words(data.length / sizeof(uint32_t));
+            [data getBytes:words.data() length:data.length];
+            if (words[0] != 0x07230203) throw std::runtime_error("Invalid SPIR-V magic");
+            VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            info.codeSize = data.length;
+            info.pCode = words.data();
+            VkShaderModule module = VK_NULL_HANDLE;
+            check(vkCreateShaderModule(mDevice, &info, nullptr, &module), "vkCreateShaderModule");
+            return module;
+        }
+
+        void createTrianglePipeline()
+        {
+            VkShaderModule vertex = VK_NULL_HANDLE, fragment = VK_NULL_HANDLE;
+            try
+            {
+                vertex = loadShader(@"triangle.vert");
+                fragment = loadShader(@"triangle.frag");
+                VkPipelineShaderStageCreateInfo stages[2]{};
+                for (auto& stage : stages) { stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO; stage.pName = "main"; }
+                stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vertex;
+                stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragment;
+                VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+                VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+                assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+                VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+                viewport.viewportCount = 1; viewport.scissorCount = 1;
+                VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+                raster.polygonMode = VK_POLYGON_MODE_FILL;
+                raster.cullMode = VK_CULL_MODE_NONE;
+                raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+                raster.lineWidth = 1.0f;
+                VkPipelineMultisampleStateCreateInfo samples{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+                samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+                VkPipelineColorBlendAttachmentState attachment{};
+                attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+                VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+                blend.attachmentCount = 1; blend.pAttachments = &attachment;
+                const VkDynamicState dynamicStates[]{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+                VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+                dynamic.dynamicStateCount = 2; dynamic.pDynamicStates = dynamicStates;
+                VkPipelineLayoutCreateInfo layout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+                check(vkCreatePipelineLayout(mDevice, &layout, nullptr, &mPipelineLayout), "vkCreatePipelineLayout");
+                VkGraphicsPipelineCreateInfo pipeline{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+                pipeline.stageCount = 2; pipeline.pStages = stages;
+                pipeline.pVertexInputState = &vertexInput; pipeline.pInputAssemblyState = &assembly;
+                pipeline.pViewportState = &viewport; pipeline.pRasterizationState = &raster;
+                pipeline.pMultisampleState = &samples; pipeline.pColorBlendState = &blend;
+                pipeline.pDynamicState = &dynamic; pipeline.layout = mPipelineLayout;
+                pipeline.renderPass = mPass; pipeline.subpass = 0;
+                check(vkCreateGraphicsPipelines(mDevice, VK_NULL_HANDLE, 1, &pipeline, nullptr, &mPipeline), "vkCreateGraphicsPipelines");
+                logLine("PIPELINE: triangle ready; SPIR-V vertex + fragment; vkCmdDraw(3); no descriptors/VBO/depth/readback");
+            }
+            catch (...)
+            {
+                if (fragment) vkDestroyShaderModule(mDevice, fragment, nullptr);
+                if (vertex) vkDestroyShaderModule(mDevice, vertex, nullptr);
+                // Do not disguise a failed geometry test as a successful clear test.
+                logLine("TRIANGLE BLOCKED: pipeline setup failed; use --clear-only or SMOKE_CLEAR_ONLY=ON for baseline");
+                throw;
+            }
+            vkDestroyShaderModule(mDevice, fragment, nullptr);
+            vkDestroyShaderModule(mDevice, vertex, nullptr);
+        }
+
         void logCapabilities(const std::vector<VkExtensionProperties>& extensions)
         {
             VkPhysicalDeviceProperties properties{};
@@ -426,6 +569,7 @@ namespace
             pass.dependencyCount = 1;
             pass.pDependencies = &dependency;
             check(vkCreateRenderPass(mDevice, &pass, nullptr, &mPass), "vkCreateRenderPass");
+            if (mTriangle) createTrianglePipeline();
             for (VkImage image : images)
             {
                 VkImageView view = VK_NULL_HANDLE;
@@ -455,6 +599,7 @@ namespace
             mRequestedWidth = width;
             mRequestedHeight = height;
             mDirty = false;
+            ++mRecreations;
             logLine("SWAPCHAIN: " + std::to_string(mExtent.width) + "x" + std::to_string(mExtent.height)
                 + "; images=" + std::to_string(images.size()) + "; format=" + std::to_string(format.format)
                 + "; FIFO; COLOR_ATTACHMENT only; no framebuffer readback");
@@ -462,6 +607,9 @@ namespace
 
         void destroySwapchain()
         {
+            if (mPipeline) vkDestroyPipeline(mDevice, mPipeline, nullptr);
+            if (mPipelineLayout) vkDestroyPipelineLayout(mDevice, mPipelineLayout, nullptr);
+            mPipeline = VK_NULL_HANDLE; mPipelineLayout = VK_NULL_HANDLE;
             for (auto frame : mFrames) vkDestroyFramebuffer(mDevice, frame, nullptr);
             for (auto view : mViews) vkDestroyImageView(mDevice, view, nullptr);
             for (auto semaphore : mPresentReady) vkDestroySemaphore(mDevice, semaphore, nullptr);
@@ -472,6 +620,9 @@ namespace
         }
 
         VkInstance mInstance = VK_NULL_HANDLE;
+        VkDebugUtilsMessengerEXT mDebug = VK_NULL_HANDLE;
+        PFN_vkDestroyDebugUtilsMessengerEXT mDestroyDebug = nullptr;
+        std::atomic<uint64_t> mDebugErrors{0}, mDebugWarnings{0};
         VkSurfaceKHR mSurface = VK_NULL_HANDLE;
         VkPhysicalDevice mPhysical = VK_NULL_HANDLE;
         VkDevice mDevice = VK_NULL_HANDLE;
@@ -483,12 +634,17 @@ namespace
         VkFence mFence = VK_NULL_HANDLE;
         VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
         VkRenderPass mPass = VK_NULL_HANDLE;
+        VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline mPipeline = VK_NULL_HANDLE;
         VkExtent2D mExtent{};
         std::vector<VkImageView> mViews;
         std::vector<VkFramebuffer> mFrames;
         std::vector<VkSemaphore> mPresentReady;
         uint32_t mRequestedWidth = 0, mRequestedHeight = 0;
         uint64_t mPresents = 0;
+        uint64_t mRecreations = 0;
+        smoke::FrameSample mFrameSample;
+        bool mTriangleAvailable = false, mTriangle = false;
         bool mDirty = true;
     };
 }
@@ -513,6 +669,10 @@ namespace
     BOOL _failed;
     CFTimeInterval _epoch;
     CFTimeInterval _lastReport;
+    smoke::FrameTiming _timing;
+    GCController* _controller;
+    BOOL _toggleHeld;
+    uint64_t _lastRecreation;
 }
 - (void)loadView
 {
@@ -522,7 +682,7 @@ namespace
     layer.framebufferOnly = YES;
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     _status = [[UILabel alloc] initWithFrame:CGRectZero];
-    _status.text = @"Initializing direct Vulkan presentation…";
+    _status.text = @"Initializing Vulkan triangle + direct presentation...";
     _status.textColor = UIColor.whiteColor;
     _status.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
     _status.numberOfLines = 0;
@@ -538,14 +698,15 @@ namespace
     layer.contentsScale = scale;
     layer.drawableSize = CGSizeMake(std::round(self.view.bounds.size.width * scale), std::round(self.view.bounds.size.height * scale));
     CGRect safe = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
-    _status.frame = CGRectMake(safe.origin.x + 8, safe.origin.y + 8, std::max<CGFloat>(1, safe.size.width - 16), 100);
+    _status.frame = CGRectMake(safe.origin.x + 8, safe.origin.y + 8, std::max<CGFloat>(1, safe.size.width - 16),
+        std::min<CGFloat>(180, std::max<CGFloat>(1, safe.size.height - 16)));
 }
 - (void)failWithMessage:(NSString*)message
 {
     _failed = YES;
     [_displayLink invalidate];
     _displayLink = nil;
-    _status.text = [@"BLOCKED — no rendering fallback\n" stringByAppendingString:message];
+    _status.text = [@"BLOCKED - rendering stopped\n" stringByAppendingString:message];
     logLine(std::string("BLOCKED: ") + message.UTF8String);
 }
 - (void)resumeRendering
@@ -558,16 +719,28 @@ namespace
         if (!_renderer)
         {
             NSString* documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-            if (logFile) std::fclose(logFile);
-            logFile = std::fopen([documents stringByAppendingPathComponent:@"smoke.log"].fileSystemRepresentation, "w");
+            {
+                const std::lock_guard<std::mutex> lock(logMutex);
+                if (logFile) std::fclose(logFile);
+                logFile = std::fopen([documents stringByAppendingPathComponent:@"smoke.log"].fileSystemRepresentation, "w");
+            }
             logLine("BEGIN: standalone iOS Vulkan smoke; 30 Hz request; no Mesa; no performance claim");
             logLine(std::string("OS: ") + UIDevice.currentDevice.systemVersion.UTF8String);
+            NSString* mode = [NSBundle.mainBundle objectForInfoDictionaryKey:@"IOSRenderSmokeMode"];
+            if (![mode isEqualToString:@"triangle"] && ![mode isEqualToString:@"clear"])
+                throw std::runtime_error("Missing/invalid IOSRenderSmokeMode bundle metadata");
+            const bool triangleAvailable = [mode isEqualToString:@"triangle"];
+            const bool clearOnly = [NSProcessInfo.processInfo.arguments containsObject:@"--clear-only"];
+            logLine(std::string("MODE: ") + (triangleAvailable && !clearOnly ? "triangle" : "clear-only baseline"));
             _renderer = std::make_unique<Renderer>();
-            _renderer->initialize((CAMetalLayer*)self.view.layer);
+            _renderer->initialize((CAMetalLayer*)self.view.layer, triangleAvailable, clearOnly);
         }
         _renderer->invalidateSurfaceSize();
         _epoch = CACurrentMediaTime();
         _lastReport = _epoch;
+        _timing.reset(_epoch);
+        _controller = nil;
+        _toggleHeld = YES; // require release after activation before toggling
         _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(draw:)];
         _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 30, 30);
         [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
@@ -592,17 +765,66 @@ namespace
     if (!_active || _failed) return;
     try
     {
+        GCController* selected = nil;
+        for (GCController* candidate in GCController.controllers)
+            if (candidate.extendedGamepad) { selected = candidate; break; }
+        if (_controller != selected)
+        {
+            _controller = selected;
+            _toggleHeld = YES; // a held button at connect must not switch mode
+            logLine(_controller ? std::string("CONTROLLER: ") + (_controller.vendorName.UTF8String ?: "extended gamepad")
+                                : "CONTROLLER: none; automatic smoke rendering continues");
+        }
+        const BOOL toggle = _controller.extendedGamepad.buttonY.isPressed;
+        if (toggle && !_toggleHeld)
+        {
+            _renderer->toggleMode();
+            _timing.reset(CACurrentMediaTime());
+        }
+        _toggleHeld = toggle;
+        const double started = CACurrentMediaTime();
         CAMetalLayer* layer = (CAMetalLayer*)self.view.layer;
         const double seconds = link.timestamp - _epoch;
-        if (_renderer->render(static_cast<uint32_t>(layer.drawableSize.width), static_cast<uint32_t>(layer.drawableSize.height), seconds)
-            && link.timestamp - _lastReport >= 1.0)
+        const bool presented = _renderer->render(static_cast<uint32_t>(layer.drawableSize.width), static_cast<uint32_t>(layer.drawableSize.height), seconds);
+        const double ended = CACurrentMediaTime();
+        auto sample = _renderer->frameSample();
+        sample.start = started; sample.end = ended; sample.presented = presented;
+        if (_lastRecreation != _renderer->recreations())
         {
-            _lastReport = link.timestamp;
+            _lastRecreation = _renderer->recreations();
+            // Exclude startup/resize/pipeline compilation from steady pacing statistics.
+            _timing.reset(ended);
+            _lastReport = ended;
+            logLine("TIMING: reset after swapchain recreation; CPU setup ms=" + std::to_string((ended - started) * 1000.0));
+        }
+        else _timing.add(sample);
+        if (ended - _lastReport >= 2.0)
+        {
+            _lastReport = ended;
             const auto thermal = NSProcessInfo.processInfo.thermalState;
-            NSString* message = [NSString stringWithFormat:@"Direct Vulkan swapchain → CAMetalLayer\nPresent calls: %llu; 30 Hz requested\nThermal state: %ld; inspect smoke.log + Metal capture",
-                static_cast<unsigned long long>(_renderer->presents()), static_cast<long>(thermal)];
+            NSString* message = [NSString stringWithFormat:
+                @"Vulkan -> MoltenVK -> CAMetalLayer | %@\n"
+                @"Present calls: %llu | 30 Hz requested (not measured FPS)\n"
+                @"CPU callbacks %.1f Hz | accepted presents %.1f/s\n"
+                @"Callback interval mean/max %.1f/%.1f ms | >50ms: %llu\n"
+                @"CPU render mean/max %.2f/%.2f ms | skipped: %llu\n"
+                @"Fence/acquire/present per-callback mean %.2f/%.2f/%.2f ms\n"
+                @"Debug warn/error %llu/%llu | thermal %ld | %@",
+                _renderer->triangle() ? @"TRIANGLE" : @"CLEAR ONLY",
+                static_cast<unsigned long long>(_renderer->presents()),
+                _timing.callbackHz(ended), _timing.presentsPerSecond(ended),
+                _timing.intervalMeanMs(), _timing.intervalMaxMs(), static_cast<unsigned long long>(_timing.slowIntervals()),
+                _timing.cpuMeanMs(), _timing.cpuMaxMs(), static_cast<unsigned long long>(_timing.skipped()),
+                _timing.fenceMeanMs(), _timing.acquireMeanMs(), _timing.presentMeanMs(),
+                static_cast<unsigned long long>(_renderer->debugWarnings()), static_cast<unsigned long long>(_renderer->debugErrors()),
+                static_cast<long>(thermal), _controller ? (_renderer->triangleAvailable() ? @"Y: triangle/clear" : @"controller; clear build")
+                                                       : @"controller: none"];
             _status.text = message;
             logLine(message.UTF8String);
+            logLine("TIMING: max accepted-present return interval ms=" + std::to_string(_timing.presentIntervalMaxMs())
+                + "; window seconds=" + std::to_string(_timing.elapsed(ended))
+                + "; recreations=" + std::to_string(_renderer->recreations()) + "; CPU measurements, not GPU/scanout FPS");
+            _timing.reset(ended);
         }
     }
     catch (const std::exception& error) { [self failWithMessage:@(error.what())]; }
@@ -637,6 +859,7 @@ namespace
     (void)scene;
     [(SmokeViewController*)self.window.rootViewController suspendRendering];
     self.window = nil;
+    const std::lock_guard<std::mutex> lock(logMutex);
     if (logFile) { std::fclose(logFile); logFile = nullptr; }
 }
 @end

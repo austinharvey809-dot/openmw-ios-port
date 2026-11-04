@@ -16,6 +16,11 @@ set(MOLTENVK_ROOT "" CACHE PATH "Existing extracted MoltenVK distribution or sta
 set(SMOKE_BUNDLE_ID "org.openmw.experiments.ios-render-smoke" CACHE STRING "Own bundle identifier for device signing")
 set(SMOKE_DEVELOPMENT_TEAM "" CACHE STRING "Apple development team, needed for a signed device build")
 option(SMOKE_UNSIGNED "Compile an unsigned device app; cannot install until signed" OFF)
+option(SMOKE_CLEAR_ONLY "Build the original clear-only fallback without shaders" OFF)
+set(SMOKE_RENDER_MODE "triangle")
+if(SMOKE_CLEAR_ONLY)
+    set(SMOKE_RENDER_MODE "clear")
+endif()
 if(NOT IS_DIRECTORY "${MOLTENVK_ROOT}")
     message(FATAL_ERROR "Supply -DMOLTENVK_ROOT=/absolute/path/to/existing/distribution. Configuration downloads nothing.")
 endif()
@@ -32,6 +37,34 @@ message(STATUS "MoltenVK device archive: ${SMOKE_MOLTENVK_LIBRARY}")
 message(STATUS "Matching Vulkan headers: ${SMOKE_VULKAN_INCLUDE_DIR}")
 
 add_executable(IOSRenderSmoke MACOSX_BUNDLE src/main.mm)
+if(NOT SMOKE_CLEAR_ONLY)
+    # This is a host executable, never an iphoneos program or runtime dependency.
+    find_program(SMOKE_GLSLANG_VALIDATOR NAMES glslangValidator glslang
+        NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    execute_process(COMMAND "${SMOKE_GLSLANG_VALIDATOR}" --version
+        RESULT_VARIABLE _shader_result OUTPUT_VARIABLE _shader_version ERROR_VARIABLE _shader_error)
+    if(NOT _shader_result EQUAL 0)
+        message(FATAL_ERROR "Cannot execute host glslang: ${_shader_error}")
+    endif()
+    message(STATUS "Host shader compiler: ${SMOKE_GLSLANG_VALIDATOR}\n${_shader_version}")
+    set(_smoke_shaders)
+    foreach(_stage vert frag)
+        set(_source "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle.${_stage}")
+        set(_output "${CMAKE_CURRENT_BINARY_DIR}/shaders/triangle.${_stage}.spv")
+        add_custom_command(OUTPUT "${_output}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/shaders"
+            COMMAND "${SMOKE_GLSLANG_VALIDATOR}" -V --target-env vulkan1.0
+                -S "${_stage}" -e main -o "${_output}" "${_source}"
+            DEPENDS "${_source}" "${SMOKE_GLSLANG_VALIDATOR}"
+            COMMENT "Compile triangle.${_stage} to SPIR-V 1.0" VERBATIM)
+        set_source_files_properties("${_output}" PROPERTIES
+            GENERATED TRUE HEADER_FILE_ONLY TRUE MACOSX_PACKAGE_LOCATION Resources)
+        list(APPEND _smoke_shaders "${_output}")
+    endforeach()
+    add_custom_target(IOSRenderSmokeShaders DEPENDS ${_smoke_shaders})
+    add_dependencies(IOSRenderSmoke IOSRenderSmokeShaders)
+    target_sources(IOSRenderSmoke PRIVATE ${_smoke_shaders})
+endif()
 target_compile_features(IOSRenderSmoke PRIVATE cxx_std_17)
 set_target_properties(IOSRenderSmoke PROPERTIES
     OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED YES
@@ -49,7 +82,7 @@ target_compile_definitions(IOSRenderSmoke PRIVATE VK_USE_PLATFORM_METAL_EXT=1 VK
 target_include_directories(IOSRenderSmoke SYSTEM PRIVATE "${SMOKE_VULKAN_INCLUDE_DIR}")
 target_link_libraries(IOSRenderSmoke PRIVATE "${SMOKE_MOLTENVK_LIBRARY}")
 target_link_options(IOSRenderSmoke PRIVATE -ObjC)
-foreach(_framework UIKit Foundation QuartzCore Metal CoreGraphics IOSurface)
+foreach(_framework UIKit Foundation QuartzCore Metal CoreGraphics IOSurface GameController)
     find_library(SMOKE_${_framework} NAMES ${_framework} REQUIRED)
     target_link_libraries(IOSRenderSmoke PRIVATE "${SMOKE_${_framework}}")
 endforeach()

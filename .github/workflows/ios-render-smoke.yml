@@ -9,6 +9,11 @@ on:
       - experiments/ios-render-smoke/**
       - .github/workflows/ios-render-smoke.yml
   workflow_dispatch:
+    inputs:
+      clear_only:
+        description: Build the original clear-only fallback without shaders
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,13 +22,16 @@ jobs:
   unsigned-device-app:
     if: github.ref == 'refs/heads/ios-port'
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 25
     defaults:
       run:
         shell: bash
     env:
       EXPERIMENT: experiments/ios-render-smoke
       MOLTENVK_SHA256: b5d947b1660e6e9fed40b9cd2387e160aaab9e80b775c0cef7e14059405178c1
+      # glslang 15.1.0; host build tool only, never linked into the iOS app.
+      GLSLANG_REVISION: 1062752a891c95b2bfeed9e356562d88f9df84ac
+      SMOKE_CLEAR_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.clear_only && 'ON' || 'OFF' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,11 +54,14 @@ jobs:
             printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
           } 2>&1 | tee "$EXPERIMENT/artifacts/toolchain.log"
 
-      - name: Host resolver and IPA packaging tests (no Apple execution)
+      - name: Host resolver, IPA packaging and timing tests (no device execution)
         run: |
           set -euo pipefail
           python3 -m unittest discover -s "$EXPERIMENT/tools" -p 'test_*.py' -v \
             2>&1 | tee "$EXPERIMENT/artifacts/resolver-tests.log"
+          c++ -std=c++17 -Wall -Wextra -Werror "$EXPERIMENT/tests/frame_timing.cpp" \
+            -o "$RUNNER_TEMP/smoke-timing-tests"
+          "$RUNNER_TEMP/smoke-timing-tests" 2>&1 | tee "$EXPERIMENT/artifacts/timing-tests.log"
 
       - name: Fetch only the pinned public iOS MoltenVK release
         run: |
@@ -65,13 +76,44 @@ jobs:
           printf 'MoltenVK v1.4.2 iOS release\nArchive SHA-256: %s\n' "$MOLTENVK_SHA256" \
             > "$EXPERIMENT/artifacts/dependency.txt"
 
+      - name: Build pinned host shader compiler (no SDK or external projects)
+        if: env.SMOKE_CLEAR_ONLY != 'ON'
+        run: |
+          set -euo pipefail
+          source_dir="$RUNNER_TEMP/glslang-source"
+          build_dir="$RUNNER_TEMP/glslang-host"
+          git init "$source_dir"
+          git -C "$source_dir" remote add origin https://github.com/KhronosGroup/glslang.git
+          git -C "$source_dir" fetch --depth 1 origin "$GLSLANG_REVISION"
+          git -C "$source_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$GLSLANG_REVISION"
+          cmake -S "$source_dir" -B "$build_dir" -G 'Unix Makefiles' \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_SYSROOT=macosx \
+            -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
+            -DBUILD_EXTERNAL=OFF -DENABLE_OPT=OFF -DENABLE_HLSL=OFF \
+            -DENABLE_PCH=OFF -DENABLE_SPVREMAPPER=OFF -DGLSLANG_TESTS=OFF \
+            -DGLSLANG_ENABLE_INSTALL=OFF -DENABLE_GLSLANG_BINARIES=ON \
+            2>&1 | tee "$EXPERIMENT/artifacts/shader-toolchain.log"
+          cmake --build "$build_dir" --config Release --target glslang-standalone --parallel 3 \
+            2>&1 | tee -a "$EXPERIMENT/artifacts/shader-toolchain.log"
+          "$build_dir/StandAlone/glslang" --version \
+            2>&1 | tee -a "$EXPERIMENT/artifacts/shader-toolchain.log"
+          printf 'Host glslang 15.1.0 source commit: %s\n' "$GLSLANG_REVISION" \
+            >> "$EXPERIMENT/artifacts/dependency.txt"
+          cp "$source_dir/LICENSE.txt" "$EXPERIMENT/artifacts/glslang-LICENSE.txt"
+
       - name: Configure the independent device app
         run: |
           set -euo pipefail
+          shader_args=(-DSMOKE_CLEAR_ONLY="$SMOKE_CLEAR_ONLY")
+          if [ "$SMOKE_CLEAR_ONLY" != ON ]; then
+            shader_args+=(-DSMOKE_GLSLANG_VALIDATOR="$RUNNER_TEMP/glslang-host/StandAlone/glslang")
+          fi
           cmake -S "$EXPERIMENT" -B "$EXPERIMENT/build" -G Xcode \
             -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
             -DMOLTENVK_ROOT="$RUNNER_TEMP/moltenvk-ios" -DSMOKE_UNSIGNED=ON \
+            "${shader_args[@]}" \
             2>&1 | tee "$EXPERIMENT/artifacts/configure.log"
           cp "$EXPERIMENT/build/moltenvk-resolved.cmake" "$EXPERIMENT/artifacts/"
 
