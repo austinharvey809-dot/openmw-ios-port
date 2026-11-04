@@ -86,13 +86,14 @@ jobs:
           set -euo pipefail
           app=$(find "$EXPERIMENT/build" -type d -name IOSRenderSmoke.app -print -quit)
           test -n "$app"
+          APP_BIN="$app/IOSRenderSmoke"
           /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist"
-          xcrun lipo -info "$app/IOSRenderSmoke" | tee "$EXPERIMENT/artifacts/architecture.log"
-          xcrun lipo -verify_arch arm64 "$app/IOSRenderSmoke"
-          test "$(xcrun lipo -archs "$app/IOSRenderSmoke")" = arm64
-          xcrun vtool -show-build "$app/IOSRenderSmoke" > "$EXPERIMENT/artifacts/platform.log"
+          xcrun lipo -info "$APP_BIN" | tee "$EXPERIMENT/artifacts/architecture.log"
+          xcrun lipo "$APP_BIN" -verify_arch arm64
+          test "$(xcrun lipo -archs "$APP_BIN")" = arm64
+          xcrun vtool -show-build "$APP_BIN" > "$EXPERIMENT/artifacts/platform.log"
           grep -Eq '^[[:space:]]*platform[[:space:]]+IOS[[:space:]]*$' "$EXPERIMENT/artifacts/platform.log"
-          xcrun otool -L "$app/IOSRenderSmoke" > "$EXPERIMENT/artifacts/linkage.log"
+          xcrun otool -L "$APP_BIN" > "$EXPERIMENT/artifacts/linkage.log"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$EXPERIMENT/artifacts/IOSRenderSmoke-unsigned.app.zip"
           dsym=$(find "$EXPERIMENT/build" -type d -name IOSRenderSmoke.app.dSYM -print -quit)
           if [ -n "$dsym" ]; then
