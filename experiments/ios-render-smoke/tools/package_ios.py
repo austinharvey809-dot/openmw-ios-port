@@ -113,7 +113,179 @@ def check_sdk(sdk: Path):
     require(str(settings.get("CanonicalName", "")).startswith("iphoneos"), "Dependency SDK is not iphoneos")
 
 
-def system_dependency(name: str, sdk: Path):
+def _yaml_scalar(value: str):
+    value = value.strip()
+    require(bool(value), "Empty TAPI YAML metadata value")
+    if value.startswith('"'):
+        try:
+            decoded = json.loads(value)
+        except ValueError as error:
+            raise ValidationError("Unsupported quoted TAPI YAML metadata") from error
+        require(isinstance(decoded, str), "Expected TAPI YAML string")
+        return decoded
+    if value.startswith("'"):
+        require(value.endswith("'") and re.fullmatch(r"'(?:[^']|'')*'", value), "Invalid TAPI YAML quoted string")
+        return value[1:-1].replace("''", "'")
+    require(re.fullmatch(r"[A-Za-z0-9_./@+:-]+", value), "Unsupported TAPI YAML metadata scalar")
+    return value
+
+
+def _yaml_metadata_fields(text: str):
+    """Read first-document root metadata, not nested exports/inlined libraries.
+
+    This deliberately handles SDK metadata scalars and string sequences only;
+    it is not a general YAML parser and rejects unsupported metadata syntax.
+    """
+    lines = []
+    tag = None
+    for line in text.splitlines():
+        # Preserve '#' inside quoted scalars; ignore actual YAML comments.
+        clean, quote, index = [], None, 0
+        while index < len(line):
+            char = line[index]
+            if quote == '"' and char == "\\" and index + 1 < len(line):
+                clean.extend(line[index:index + 2])
+                index += 2
+                continue
+            if char in ("'", '"'):
+                if quote is None:
+                    quote = char
+                elif quote == char:
+                    if char == "'" and index + 1 < len(line) and line[index + 1] == "'":
+                        clean.extend("''")
+                        index += 2
+                        continue
+                    quote = None
+            if char == "#" and quote is None:
+                break
+            clean.append(char)
+            index += 1
+        line = "".join(clean).rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("---"):
+            if tag is not None:
+                break
+            tag = line[3:].strip()
+            continue
+        if line.strip() == "...":
+            break
+        lines.append(line)
+    require(tag in ("!tapi-tbd", "!tapi-tbd-v3"), "Unsupported TAPI YAML document tag")
+    mappings = [(index, match) for index, line in enumerate(lines)
+                if (match := re.match(r"^( *)([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$", line))]
+    require(bool(mappings), "Missing TAPI YAML root metadata")
+    root_indent = min(len(match[1]) for _, match in mappings)
+    roots = [(index, match) for index, match in mappings if len(match[1]) == root_indent]
+    fields = {}
+    selected = {"tbd-version", "targets", "install-name", "archs", "platform"}
+    for position, (index, match) in enumerate(roots):
+        key = match[2]
+        if key not in selected:
+            continue
+        require(key not in fields, f"Duplicate TAPI YAML metadata key: {key}")
+        end = roots[position + 1][0] if position + 1 < len(roots) else len(lines)
+        tail = lines[index + 1:end]
+        value = match[3].strip()
+        if key in ("targets", "archs"):
+            if value.startswith("["):
+                sequence = " ".join([value] + [line.strip() for line in tail])
+                require(sequence.endswith("]"), f"Unterminated TAPI YAML {key}")
+                values = sequence[1:-1].strip().split(",")
+                if values and not values[-1].strip():
+                    values.pop()
+                fields[key] = [_yaml_scalar(item) for item in values]
+            else:
+                require(not value and bool(tail), f"Invalid TAPI YAML {key} sequence")
+                values = []
+                for line in tail:
+                    item = re.fullmatch(r" +-\s+(.+)", line)
+                    require(item is not None, f"Unsupported TAPI YAML {key} sequence")
+                    values.append(_yaml_scalar(item[1]))
+                fields[key] = values
+        else:
+            require(not tail, f"Unsupported multiline TAPI YAML {key}")
+            fields[key] = _yaml_scalar(value)
+    return tag, fields
+
+
+def _string_targets(value, label):
+    require(isinstance(value, list) and bool(value) and all(isinstance(item, str) and item for item in value),
+            f"Invalid TAPI {label} targets")
+    return set(value)
+
+
+def read_tbd_metadata(text: str):
+    """Return supported targets and install names from the *main* stub library."""
+    text = text.lstrip("\ufeff \t\r\n")
+    if text.startswith("{"):
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                require(key not in result, f"Duplicate TAPI JSON key: {key}")
+                result[key] = value
+            return result
+        try:
+            document = json.loads(text, object_pairs_hook=unique_object)
+        except ValueError as error:
+            raise ValidationError(f"Invalid TAPI JSON: {error}") from error
+        require(document.get("tapi_tbd_version") == 5, "Unsupported TAPI JSON version (expected v5)")
+        library = document.get("main_library")
+        require(isinstance(library, dict), "Missing TAPI v5 main_library")
+        target_info = library.get("target_info")
+        require(isinstance(target_info, list) and all(isinstance(item, dict) for item in target_info), "Invalid TAPI v5 target_info")
+        targets = _string_targets([item.get("target") for item in target_info], "v5 main_library")
+        entries = library.get("install_names")
+        require(isinstance(entries, list) and bool(entries), "Missing TAPI v5 install_names")
+        names = {}
+        for entry in entries:
+            require(isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"], "Invalid TAPI v5 install name")
+            scope = _string_targets(entry["targets"], "v5 install-name") if "targets" in entry else targets
+            require(scope <= targets, "TAPI v5 install-name targets are outside main_library")
+            names.setdefault(entry["name"], set()).update(scope)
+        return {"format": "TAPI v5 JSON", "targets": targets, "install_names": names}
+    tag, fields = _yaml_metadata_fields(text)
+    name = fields.get("install-name")
+    require(isinstance(name, str) and name, "Missing TAPI YAML install-name")
+    if tag == "!tapi-tbd" and fields.get("tbd-version") == "4":
+        targets = _string_targets(fields.get("targets"), "v4 main-library")
+        format_name = "TAPI v4 YAML"
+    elif tag == "!tapi-tbd-v3":
+        arches = _string_targets(fields.get("archs"), "v3 architecture")
+        platform = fields.get("platform")
+        require(isinstance(platform, str) and platform, "Missing TAPI v3 platform")
+        targets = {arch + "-" + platform for arch in arches}
+        format_name = "TAPI v3 YAML"
+    else:
+        raise ValidationError("Unsupported TAPI YAML version")
+    return {"format": format_name, "targets": targets, "install_names": {name: targets}}
+
+
+def probe_arm64_system_stub(stub: Path, sdk: Path, name: str, minimum_os: str):
+    """Require Apple's selected linker to confirm ARM64e system-stub compatibility.
+
+    This is confined to public SDK stubs with exact iOS device targets. It does
+    not relax architecture/platform checks for the app or any bundled binary.
+    """
+    version_tuple(minimum_os)
+    with tempfile.TemporaryDirectory(prefix="ios-sdk-abi-") as directory:
+        output = Path(directory) / "probe.dylib"
+        command = ["xcrun", "--sdk", "iphoneos", "clang", "-target", f"arm64-apple-ios{minimum_os}",
+                   "-isysroot", str(sdk), "-dynamiclib", "-x", "c", "-", "-Xlinker", "-needed_library",
+                   "-Xlinker", str(stub), "-Wl,-fatal_warnings", "-Wl,-no_adhoc_codesign", "-o", str(output)]
+        try:
+            result = subprocess.run(command, input="void ios_sdk_abi_probe(void) {}\n", capture_output=True, text=True)
+        except OSError as error:
+            raise ValidationError(f"Cannot check ARM64 compatibility of {stub} with Apple's linker: {error}") from error
+        require(result.returncode == 0, f"Apple linker rejected ARM64 iOS use of {stub}: {result.stderr.strip()}")
+        try:
+            details = macho(output.read_bytes())
+        except OSError as error:
+            raise ValidationError(f"Apple linker did not produce an ARM64 iOS probe for {stub}") from error
+        require(name in details["dependencies"], f"ARM64 linker probe did not load the required SDK dependency: {name}")
+
+
+def system_dependency(name: str, sdk: Path, minimum_os="18.0"):
     require(name.startswith(("/usr/lib/", "/System/Library/Frameworks/")), f"Non-public/non-iOS absolute dependency: {name}")
     relative = name.removeprefix("/")
     safe_name(relative)
@@ -123,10 +295,16 @@ def system_dependency(name: str, sdk: Path):
     # never the build Mac's /usr/lib or /System/Library copies.
     require(stub.is_file(), f"No matching public iphoneos SDK stub for {name}: {stub}")
     text = stub.read_text(encoding="utf-8")
-    target = re.search(r"(?<![A-Za-z0-9_-])arm64-ios(?![A-Za-z0-9_-])", text)
-    legacy = re.search(r"(?m)^platform:\s*['\"]?ios['\"]?\s*$", text) and re.search(r"\barchs:\s*\[[^\]]*\barm64\b", text)
-    require(target or legacy, f"SDK stub does not advertise ARM64 iOS device support: {stub}")
-    require(name in text, f"SDK stub install name does not match dependency: {name}")
+    metadata = read_tbd_metadata(text)
+    # Explicit CPU_TYPE_ARM64 system-stub candidates, never arbitrary arm64* or
+    # platform prefixes. Exact arm64 needs no ABI fallback; ARM64e needs proof.
+    supported = metadata["targets"] & {"arm64-ios", "arm64e-ios", "arm64e.x1-ios"}
+    require(supported, f"SDK stub does not advertise ARM64 iOS device support: {stub}; "
+            f"{metadata['format']} declared targets={sorted(metadata['targets'])}")
+    supported &= metadata["install_names"].get(name, set())
+    require(supported, f"SDK stub install name does not match dependency for a supported iOS target: {name}")
+    if "arm64-ios" not in supported:
+        probe_arm64_system_stub(stub, sdk, name, minimum_os)
     return {"kind": "iphoneos-sdk", "stub": str(stub)}
 
 
@@ -215,7 +393,7 @@ def validate_bundle(files: dict[str, Entry], sdk: Path | None = None):
                 # Without an SDK, validate only the dependency's namespace and
                 # make the unverified system availability explicit in the report.
                 require(dependency.startswith(("/usr/lib/", "/System/Library/Frameworks/")), f"Unexpected host dependency: {dependency}")
-                record.update(system_dependency(dependency, sdk) if sdk else {"kind": "system-availability-not-checked"})
+                record.update(system_dependency(dependency, sdk, info["MinimumOSVersion"]) if sdk else {"kind": "system-availability-not-checked"})
             else:
                 if dependency.startswith("@rpath/"):
                     candidates = [normalize_bundle_path(path + "/" + dependency[len("@rpath/"):]) for path in rpaths]
