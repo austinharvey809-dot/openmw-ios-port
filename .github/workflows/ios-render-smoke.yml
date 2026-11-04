@@ -46,10 +46,10 @@ jobs:
             printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
           } 2>&1 | tee "$EXPERIMENT/artifacts/toolchain.log"
 
-      - name: Host dependency-resolver tests (no Apple execution)
+      - name: Host resolver and IPA packaging tests (no Apple execution)
         run: |
           set -euo pipefail
-          python3 -m unittest discover -s "$EXPERIMENT/tools" -p test_resolve_moltenvk.py -v \
+          python3 -m unittest discover -s "$EXPERIMENT/tools" -p 'test_*.py' -v \
             2>&1 | tee "$EXPERIMENT/artifacts/resolver-tests.log"
 
       - name: Fetch only the pinned public iOS MoltenVK release
@@ -81,7 +81,7 @@ jobs:
           cmake --build "$EXPERIMENT/build" --config Release --target IOSRenderSmoke -- \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$EXPERIMENT/artifacts/build.log"
 
-      - name: Package compile evidence (not an installable signed app)
+      - name: Validate application and package unsigned IPA and compile evidence
         run: |
           set -euo pipefail
           app=$(find "$EXPERIMENT/build" -type d -name IOSRenderSmoke.app -print -quit)
@@ -99,6 +99,11 @@ jobs:
           if [ -n "$dsym" ]; then
             ditto -c -k --sequesterRsrc --keepParent "$dsym" "$EXPERIMENT/artifacts/IOSRenderSmoke.dSYM.zip"
           fi
+          python3 "$EXPERIMENT/tools/package_ios.py" --app "$app" \
+            --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            --output "$EXPERIMENT/artifacts/IOSRenderSmoke-unsigned.ipa" \
+            --report "$EXPERIMENT/artifacts/ipa-validation.json" \
+            2>&1 | tee "$EXPERIMENT/artifacts/ipa-validation.log"
 
       - uses: actions/upload-artifact@v6
         if: always()

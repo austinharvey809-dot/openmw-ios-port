@@ -2,7 +2,9 @@
 
 This is an independent device application, not an OpenMW build target. It uses **Vulkan -> MoltenVK -> CAMetalLayer swapchain presentation**, with a changing render-pass clear color. There are no shaders, vertex buffers, SDL, Mesa, Zink, OpenGL calls, framebuffer readback, or CPU pixel transfers in the application. A UIKit status label is composited over the Metal layer.
 
-**Status: locally reviewed; iOS app not compiled or run.** All 14 resolver tests pass on Windows using an existing bundled CPython 3.12.3 runtime and standard library, invoked through its C API without installing Python. The `python`/`python3` commands on PATH are Microsoft Store shortcuts. Python AST, all six workflow Bash blocks, plist parsing and documentation-link checks pass. No Apple SDK or local C++ compiler is available, no large dependencies have been downloaded, and no CI run has been dispatched. These checks do not establish Apple compilation or device behavior; a full GitHub Actions schema/actionlint check was not available locally.
+**Status: previous CI build succeeded; unsigned IPA packaging added for the next run.** Public [run 41747796821](https://github.com/austinharvey809-dot/openmw-ios-port/actions/runs/41747796821) successfully configured, compiled and packaged source `57aa900a459f5ec93160597683130158d0dc65d5`. Artifact metadata is public, but downloading its bytes requires authentication, so the prior app's actual dependency list and contents were not independently inspected here. New bundle/dependency/IPA checks must pass on the next macOS run. No iPhone installation or rendering result is established.
+
+Local tests run on Windows using an existing bundled CPython 3.12.3 runtime and standard library, invoked through its C API without installing Python. The `python`/`python3` commands on PATH are Microsoft Store shortcuts. No Apple SDK or local C++ compiler is available. A full GitHub Actions schema/actionlint check is not available locally.
 
 The investigation in [direct-presentation.md](direct-presentation.md) explains why raw Vulkan presentation is a reasonable first gate, while direct **Zink** presentation remains blocked on missing UIKit/Metal native-window integration. Do not interpret a successful clear test as a working Zink/OpenMW port.
 
@@ -12,7 +14,8 @@ The investigation in [direct-presentation.md](direct-presentation.md) explains w
 - `CMakeLists.txt` and `Info.plist.in`: standalone ARM64 iOS device application, deployment target 18.0, normal signing or explicitly unsigned compilation.
 - `tools/resolve_moltenvk.py`: selects a unique static ARM64 iOS **device** archive and matching headers by XCFramework metadata; fails on missing/ambiguous inputs. It reads metadata, not dependency code. Python 3.10+ standard library only.
 - `tools/test_resolve_moltenvk.py`: synthetic host tests for device/simulator distinction, ambiguous inputs, missing files and metadata paths. No SDK or real binary required.
-- [Compile-only workflow](../../.github/workflows/ios-render-smoke.yml): hosted macOS build preparation. A path-filtered `ios-port` push or eligible manual dispatch can trigger it. No PR trigger, install, deployment, or device run.
+- `tools/package_ios.py` and `tools/test_package_ios.py`: unsigned app/dependency/IPA validation and standard-library ZIP packaging, with synthetic Mach-O/SDK/archive tests. No signing or networking.
+- [Build and packaging workflow](../../.github/workflows/ios-render-smoke.yml): a path-filtered `ios-port` push or eligible manual dispatch can trigger it. No PR trigger, signing, installation or device run.
 
 Required later: macOS with Xcode and its iOS SDK, CMake 3.24+, Python 3.10+, and a **previously obtained public MoltenVK 1.4.2 iOS distribution** with static `MoltenVK.xcframework` and corresponding Vulkan headers. Do not use the macOS archive, private-API build, a simulator slice, an installed desktop Vulkan SDK, or an unrelated Vulkan header version. Static linking requires no Vulkan loader/ICD installation. The app links UIKit, Foundation, QuartzCore, Metal, CoreGraphics and IOSurface; it does not link AppKit, IOKit or OpenGLES.
 
@@ -29,7 +32,7 @@ No dependency fetch occurs in CMake. The release archive's internal layout and a
 These commands are instructions for later execution, not commands run in this investigation. Have the matching dependency distribution available first; point `MOLTENVK_ROOT` at its extraction directory or the specific static `MoltenVK.xcframework` if there are multiple copies. Replace the team and bundle ID with your own. Run from the OpenMW repository root, without invoking its root CMake configuration:
 
 ```sh
-python3 -m unittest discover -s experiments/ios-render-smoke/tools -p test_resolve_moltenvk.py -v
+python3 -m unittest discover -s experiments/ios-render-smoke/tools -p 'test_*.py' -v
 
 cmake -S experiments/ios-render-smoke -B experiments/ios-render-smoke/build -G Xcode \
   -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
@@ -53,7 +56,18 @@ cmake -S experiments/ios-render-smoke -B experiments/ios-render-smoke/build/unsi
 cmake --build experiments/ios-render-smoke/build/unsigned --config Release --target IOSRenderSmoke -- CODE_SIGNING_ALLOWED=NO
 ```
 
-The resulting unsigned `.app` is compile evidence, not an installable signed package. No automatic IPA signing/export is provided.
+The resulting unsigned `.app` needs signing before installation. To package it into the same unsigned IPA produced by CI:
+
+```sh
+EXPERIMENT=experiments/ios-render-smoke
+app=$(find "$EXPERIMENT/build/unsigned" -type d -name IOSRenderSmoke.app -print -quit)
+python3 "$EXPERIMENT/tools/package_ios.py" --app "$app" \
+  --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  --output "$EXPERIMENT/artifacts/IOSRenderSmoke-unsigned.ipa" \
+  --report "$EXPERIMENT/artifacts/ipa-validation.json"
+```
+
+This is ZIP packaging, not Xcode signing or export. It refuses signed/profile-bearing input instead of stripping or replacing signatures.
 
 **Expected behavior and deliberate limits**
 
@@ -77,13 +91,31 @@ CADisplayLink requests 30 Hz. That request, FIFO mode and the thermal display ar
 
 **Hosted macOS compilation**
 
-The workflow uses `macos-26`, records the selected developer directory/Xcode/SDK/Clang, runs the resolver tests, downloads **only the pinned iOS MoltenVK asset**, verifies its SHA-256 and compiles an unsigned Release device app. Packaging requires an ARM64-only executable and a Mach-O `IOS` platform, rejecting a simulator artifact. It packages the app/dSYM plus toolchain/configure/build/linkage/platform logs. It never runs the app, signs it, submits it to a store, installs the full Vulkan SDK or builds OpenMW/Mesa. Hosted images and actions can change; logs preserve the actual toolchain used. The audited runner inventory currently includes a compatible Xcode/iPhoneOS SDK, so no unverified alternate toolchain is selected.
+The workflow uses `macos-26`, records the selected developer directory/Xcode/SDK/Clang, runs all resolver/packaging tests, downloads **only the pinned iOS MoltenVK asset**, verifies its SHA-256 and compiles an unsigned Release device app. Existing ARM64-only `lipo` and device-platform `vtool` checks remain. It packages the app/dSYM plus toolchain/configure/build/linkage/platform logs, and adds `IOSRenderSmoke-unsigned.ipa`, `ipa-validation.log` and `ipa-validation.json`. The existing always-upload artifact step includes all of them. Hosted images and actions can change; logs preserve the actual toolchain used. The workflow never runs or signs the app, installs the full Vulkan SDK or builds OpenMW/Mesa.
+
+The packager runs `otool -L` on the executable and any bundled dynamic libraries/frameworks, checks its output against Mach-O load commands, and records that output in the JSON report. Absolute runtime loads must resolve to public ARM64 iOS `.tbd` stubs in the selected **iphoneos** SDK; a library existing on the build Mac is not sufficient. `@rpath`, `@loader_path` and `@executable_path` dependencies must resolve to included ARM64 iOS binaries, with transitive loads validated too. Static MoltenVK is inside the executable and does not need a separate framework in the app. Missing/host-only/unresolved dependencies stop packaging; nothing is automatically copied or rewritten. See [Apple framework guidance](https://developer.apple.com/library/archive/technotes/tn2435/_index.html) and [Apple's library primer](https://developer.apple.com/forums/thread/715385).
+
+Bundle validation requires the executable named by `CFBundleExecutable`, Unix execute permissions, device ARM64 Mach-O metadata, consistent minimum iOS versions, valid iPhone bundle metadata and inline launch-screen/scene configuration. This clear-only application requires **no external shader, metallib, texture or game-data resources**. The packager rejects signing/provisioning files, credential file types, symlinks and embedded static archives. It writes `Payload/IOSRenderSmoke.app/` into a standard IPA ZIP, then reopens it to verify CRCs, unique safe paths, one app root, required files, executable permissions, native metadata and byte/permission equality with the validated bundle. The JSON report includes the IPA SHA-256 and dependency resolutions. SDK stub checks establish availability in that SDK, not runtime success on every supported iOS version.
 
 To bootstrap **without merging to the default branch**, a future authorized push to a GitHub-hosted `ios-port` branch can trigger this workflow when it changes `experiments/ios-render-smoke/**` or `.github/workflows/ios-render-smoke.yml`. Unlike manual dispatch, this push event reads the workflow from the pushed branch. Both event types have an `ios-port` job guard. A push touching only unrelated files will not run the experiment.
 
 Retained `workflow_dispatch` has a separate limitation: GitHub requires the workflow to exist on the repository's default branch before it can be dispatched; select `ios-port` as the run ref after registration. Adding `--ref ios-port` alone does not remove that requirement. See [GitHub event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch).
 
-Publishing remains outside this review: the workflow is uncommitted, and the only configured remote is the upstream GitLab repository (`https://gitlab.com/OpenMW/openmw.git`). A GitHub destination and its Actions permissions must be established before a run can occur. No commit, push, remote change or dispatch was performed. A future qualifying push or dispatch will download the dependency and compile; nothing downloads merely from editing these files locally. Check runner availability and repository Actions policy then; report failures rather than silently changing SDKs or dependencies.
+The checkout now has a `github` remote at `https://github.com/austinharvey809-dot/openmw-ios-port.git`, alongside the GitLab upstream. No commit, push, remote change or dispatch was performed during this packaging update. A future qualifying push or dispatch will download the dependency and compile; nothing downloads merely from editing these files locally.
+
+**Using the IPA with Sideloadly on Windows**
+
+Download the workflow's `ios-render-smoke-compile-<source SHA>` artifact and extract the outer GitHub artifact ZIP. Select **`IOSRenderSmoke-unsigned.ipa`** for Sideloadly; the `.app.zip` and dSYM ZIP are diagnostic artifacts. The IPA must contain `Payload/IOSRenderSmoke.app`, without an extra enclosing folder. Compare its hash with `ipa-validation.json` after download.
+
+With a normal Python 3.10+ installation, the archive can also be rechecked offline on Windows:
+
+```powershell
+python experiments/ios-render-smoke/tools/package_ios.py --validate-only C:/path/IOSRenderSmoke-unsigned.ipa --report C:/path/ipa-local-validation.json
+```
+
+Without `--sdk`, this independently checks archive structure, native metadata, resources, signatures and bundled dependency resolution, but explicitly reports **system SDK availability not checked**. CI's original report performs that SDK check on macOS.
+
+Follow the [official Sideloadly Windows setup](https://sideloadly.io/) for its Apple device software requirements and connect/trust the iPhone. Drag the IPA into Sideloadly and perform account authentication/signing locally. The repository and workflow contain no signing certificates, Apple credentials, provisioning profiles or signing secrets. The output IPA is deliberately unsigned; successful Sideloadly signing, installation, launch, Vulkan presentation and thermal behavior still require the actual iPhone 16 Plus. No installation was attempted here.
 
 **Extending to Zink**
 
