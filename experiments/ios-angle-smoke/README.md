@@ -1,0 +1,262 @@
+# iOS ANGLE Metal smoke: independent Gates 0 and 1
+
+This **uncompiled implementation** targets the iPhone 16 Plus, iOS 18+, ARM64
+device SDK. It does not modify or consume the Vulkan cube, Zink experiment,
+OpenMW, SDL, OpenSceneGraph or GL4ES. No game assets or signing material belong
+here. A CI pass will establish compilation/package evidence, not rendering or FPS.
+
+## Resource budget and current blockers
+
+**Read before opting in to an expensive build.** Standalone ANGLE still needs its
+Chromium build/toolchain dependency graph, not a small binary download. Some test
+dependencies remain unconditional upstream even though only EGL/GLES targets
+are built. Expect multi-GB network/disk use; the actual bytes, duration and peak
+memory have not been measured. Gate 0 requires 20 GiB free space before fetching,
+uses three build jobs and a 90 minute timeout. A standard hosted runner may have
+insufficient free disk or time. In that case inspect logs and choose an adequately
+sized macOS host; no automatic deletion of runner software or paid runner upgrade
+is performed. There is no automatic retry, prebuilt mirror or simulator substitute.
+
+Nothing in these scripts downloads on Windows. `build_angle.py` is a plan-only
+command unless `--allow-downloads` is supplied, and rejects a non-macOS build host
+even with that option. No CI has been launched by this implementation.
+
+Still unverified: pinned standalone GN generation, the complete device framework
+closure, hosted runner resource sufficiency, Xcode app compilation, Sideloadly
+framework signing/installation, and physical ES3/Metal behavior. A hook, missing
+resource, unsigned-framework requirement or upstream build assertion failure is
+a Gate 0 blocker to investigate, not permission to change platforms/backends.
+
+## Gate 0: pinned dependency
+
+The exact revision is in [data/angle-lock.json](data/angle-lock.json): ANGLE
+`6ea96bcca6d7f05199f5565c6d5c4722af7269da`, plus pinned depot_tools and the
+SHA-256 of ANGLE's DEPS. The checked DEPS and its pinned recursive dependencies
+own Git revisions, CIPD versions and GCS compiler object hashes. Important build,
+Clang, GN, Ninja and CPython identities are also listed in the manifest; the saved
+`gclient-revinfo.txt` records the resolved graph. This is source/dependency locking,
+not a claim of byte-identical artifacts across different Xcode/runner versions.
+
+Source basis (all at the pinned revision):
+
+- [ANGLE standalone setup](https://github.com/google/angle/blob/6ea96bcca6d7f05199f5565c6d5c4722af7269da/doc/DevSetup.md)
+  documents depot_tools/gclient. Its simulator example is not device evidence.
+- [gni/angle.gni](https://github.com/google/angle/blob/6ea96bcca6d7f05199f5565c6d5c4722af7269da/gni/angle.gni)
+  wraps `angle_shared_library` with `ios_framework_bundle` on iOS. Build only
+  `libEGL` and `libGLESv2`, retaining original bundles and all their resources.
+- [DEPS](https://github.com/google/angle/blob/6ea96bcca6d7f05199f5565c6d5c4722af7269da/DEPS)
+  provisions pinned GN/Clang/Ninja/CPython. Sync with `--nohooks`; explicitly run
+  LASTCHANGE metadata generation only. Do not fetch hermetic Xcode, Rust, trace
+  corpora or Dawn/OpenCL dependencies. Some remaining dependencies are upstream
+  unconditional. Missing required tooling fails the gate; audit the relevant hook
+  rather than running every hook without review.
+- [metal_backend.gni](https://github.com/google/angle/blob/6ea96bcca6d7f05199f5565c6d5c4722af7269da/src/libANGLE/renderer/metal/metal_backend.gni)
+  defaults iOS internal shaders to the runtime compilation path unless a Metal
+  toolchain is supplied. This experiment follows that path, without downloading
+  Xcode's optional Metal compiler component or promising precompiled shaders.
+- Chromium build at `5987c5fc2c176d5c1329de0832c6b3c28b3638f8`:
+  `config/ios/ios_sdk.gni` selects iphoneos for `target_environment="device"`;
+  `config/apple/mobile_config.gni` declares `ios_enable_code_signing`.
+
+[args.gn](args.gn) explicitly selects iOS/device/ARM64, system Xcode, deployment
+18.0, unsigned Release and Metal only. GL, Vulkan, SwiftShader, WebGPU, null and
+OpenCL backends are disabled. Unused GN arguments are fatal. This is a minimal
+official pair of dynamic framework targets, not a manually assembled set of
+incomplete static archives. Build-system downloads are confined to the explicitly
+authorized Gate 0 invocation.
+
+On a Mac with full Xcode selected, Python 3.10+, Git and CMake 3.24+:
+
+```sh
+EXPERIMENT=experiments/ios-angle-smoke
+# First print/review the plan; no fetch or build:
+python3 "$EXPERIMENT/tools/build_angle.py" \
+  --workspace /path/to/empty/angle-work --output /path/to/empty/angle-ios-arm64
+# Expensive opt-in, ONLY after reviewing the budget above:
+set -o pipefail
+python3 -u "$EXPERIMENT/tools/build_angle.py" \
+  --workspace /path/to/empty/angle-work --output /path/to/empty/angle-ios-arm64 \
+  --allow-downloads --jobs 3 2>&1 | tee angle-build.log
+```
+
+Use new/empty, separate workspace and package directories. No destructive retry
+or automatic checkout reset is implemented. Inspect and retain failed workspaces.
+`depot_tools` self-update is disabled. The build records exact system Xcode/SDK
+and downloaded Clang versions. It checks the pinned ANGLE/DEPS/build revisions.
+
+`validate_dependency.py` requires two flat unsigned ARM64 iOS Mach-O frameworks,
+their matching iPhoneOS plists, exported EGL/GLES3 entry points, `@rpath` install
+names, a bounded runtime search path, and closure against the actual iphoneos SDK
+TAPI stubs (v4 YAML/v5 JSON). It rejects simulator/macOS binaries even if ARM64,
+alternate GL/Vulkan providers, signatures, symlinks and unresolved libraries. It
+records `lipo`, `vtool`, `nm`, `otool -L`, dependency metadata and package hashes.
+The app resolver checks that inventory and rejects modified/incomplete packages.
+Unsigned is intentional: sign the complete bundle locally for installation.
+
+All fetched `LICENSE*`, `COPYING*`, `NOTICE*` and `README.chromium` files are retained
+under original paths in `Licenses/`; ANGLE's BSD-style license is mandatory. This
+is an overinclusive notice inventory, not a completed legal review of every linked
+third-party object. Review the actual resolved closure/notices before redistribution.
+
+## Gate 1: app build using a Gate 0 artifact
+
+The dependency gate can run alone (`build_dependencies=true` and
+`build_application=false` in manual dispatch).
+The app gate accepts its previously validated artifact; app configuration neither
+fetches nor rebuilds ANGLE:
+
+```sh
+cmake -S experiments/ios-angle-smoke -B experiments/ios-angle-smoke/build -G Xcode \
+  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+  -DANGLE_ROOT=/path/to/angle-ios-arm64
+cmake --build experiments/ios-angle-smoke/build --config Release \
+  --target IOSANGLESmoke -- CODE_SIGNING_ALLOWED=NO
+```
+
+The UIKit view owns a CAMetalLayer. EGL client extensions and
+`eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, ..., METAL_ANGLE)` are required.
+There is no `eglGetDisplay` fallback. The app binds the ES API, chooses an ES3
+window config, creates an ES3 context and layer-backed EGL surface, then verifies
+GL major version >=3 and renderer identity containing ANGLE and Metal. It logs
+actual EGL/GL/vendor/GLSL strings, extensions and config attributes.
+
+The original tiny ESSL 3.00 shaders generate a colored triangle from `gl_VertexID`
+with a VAO. They need no shader compiler download or resource files. Changing
+clear color remains independent of shader compilation. Full compile/link logs
+are exported; shader failure leaves explicit clear-only fallback diagnostics.
+Other EGL/GL failures stop callbacks visibly with a BLOCKED message; lost contexts
+require a relaunch rather than an untested recovery workaround.
+
+PS4 **Triangle / Y** toggles clear-only. **Square / X** selects triangle when its
+program is available. Reconnection/resume primes held buttons without synthetic
+presses. No touchscreen gameplay controls are present. A controller is optional
+to observe the initial automatic triangle.
+
+Callbacks request 30 Hz. The overlay and JSON distinguish requested rate,
+successful `eglSwapBuffers` returns/active second, CPU callback time including swap
+wait, and callback interval. **Actual display FPS is unmeasured**, and EGL success
+does not prove scanout. GL error counts exclude EGL failures, which are separately
+reported as fatal diagnostic strings. Thermal state is Apple's categorical value,
+not a power measurement. Logging/JSON run at roughly 1 Hz; CPU timing covers the
+draw/controller callback before diagnostics export, not total process CPU time.
+
+Before inactivity, stop callbacks, perform a single lifecycle `glFinish`, and
+unbind the context before suspension. Foregrounding rebinds it and resets timing
+windows. There is no per-frame finish, fence wait, texture upload or framebuffer
+readback. Layout updates the layer's pixel size; each frame queries actual EGL
+surface size for `glViewport`. Orientation and Home Screen recovery need device
+validation, including checking whether this ANGLE revision resizes existing
+surfaces correctly without recreation.
+
+## IPA, CI and Windows installation
+
+[ios-angle-smoke.yml](../../.github/workflows/ios-angle-smoke.yml) has path-filtered
+`ios-port` push triggers. Ordinary matching pushes run only the Ubuntu lightweight
+host-test job (10 minute limit); they skip both macOS build jobs. Unrelated paths
+do not start this workflow at all. There are no schedule, PR or repository-dispatch
+triggers. Dependency downloads/compilation require one of these deliberate opt-ins:
+
+1. **Commit-message opt-in on `ios-port`:** include the exact, case-sensitive token
+   `[run-angle]` anywhere in the **HEAD commit message** of a push. For example,
+   `Test ANGLE device build [run-angle]`. The push must also change a file under
+   `experiments/ios-angle-smoke/` or `.github/workflows/ios-angle-smoke.yml` to pass
+   the existing path filter. A small intentional README change is sufficient;
+   an empty commit or a token only in an earlier commit does not activate the
+   workflow. This path works with the workflow on `ios-port` and does not depend
+   on manual dispatch being registered on the default branch. It requests both
+   dependency and app builds. Once that commit is no longer HEAD, later ordinary
+   pushes do not inherit its opt-in. Pushing the same opted-in HEAD again, or
+   rerunning that workflow, still represents an opted-in build.
+2. **Manual dispatch, where registered:** choose the `ios-port` branch and check
+   `build_dependencies` (default **false**). Leave `build_application` checked
+   (default **true**) for both gates; uncheck it for dependency-only validation.
+   Dispatch without `build_dependencies` runs lightweight checks only, even if
+   `build_application` is checked or the selected commit contains `[run-angle]`.
+   Manual dispatch generally requires default-branch registration, as described
+   in [GitHub's event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch).
+
+The opt-in helper reads GitHub's event JSON, never interpolating commit messages
+into shell commands. Its only outputs are literal `true`/`false`. Gate 0 requires
+successful lightweight validation and `run_expensive == 'true'`; Gate 1 requires
+successful Gate 0 and `build_application == 'true'`. Skipped/failed validation or
+dependency jobs cannot start the app job. Gate 1 downloads the verified Gate 0
+artifact from the same run, then the existing resolver checks its package hashes.
+
+The 90 minute dependency and 25 minute application limits remain unchanged.
+Ordinary pushes do not cancel already-running opted-in builds: workflow-wide
+`cancel-in-progress` was removed. Multiple deliberate opt-ins can therefore start
+separate builds. Gate 0 still uploads failure logs/GN diagnostics with `always()`;
+successful dependency artifacts remain independent of Gate 1. No workflow has
+been triggered here, and no default branch registration, commit or push is done
+by these scripts.
+
+After compiling, CI validates the executable and all linked frameworks, system
+dependencies against selected SDK stubs, deployment/architecture/rpaths/resources
+and absence of signing credentials/profiles. It packages and reopens:
+
+```text
+Payload/IOSANGLESmoke.app/
+  IOSANGLESmoke
+  Info.plist
+  Frameworks/<upstream EGL and GLES frameworks, including resources>
+  Licenses/...
+  angle-lock.json
+  angle-build.json
+```
+
+The ZIP validator checks one application root, safe/unique paths, permissions,
+CRC and byte equality with the validated bundle. Gate 1 uploads
+`IOSANGLESmoke-unsigned.ipa`, JSON reports, logs and an app evidence tarball.
+For a local package (substitute the generated app path):
+
+```sh
+python3 experiments/ios-angle-smoke/tools/package_ios.py \
+  --app experiments/ios-angle-smoke/build/Release-iphoneos/IOSANGLESmoke.app \
+  --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+  --output IOSANGLESmoke-unsigned.ipa --report ipa-validation.json
+```
+
+Download the unsigned IPA on Windows and have Sideloadly sign/install the app
+and both embedded frameworks locally. Credentials/certificates remain outside
+this repository. Do not treat successful ZIP validation as installation proof.
+Retrieve `angle-smoke.json` and `angle-smoke.log` from the app's Documents folder
+using Files/Apple file sharing; Files exposes “On My iPhone” after files exist.
+Store exports only in the ignored `device-results/` directory. Logs append across
+launches; JSON is the latest snapshot. Inspect Xcode/device console if the app
+fails before Documents logging starts (for example a dyld error).
+
+## Checks and device acceptance
+
+Host checks require only Python stdlib, no ANGLE checkout:
+
+```sh
+python3 -m unittest discover -s experiments/ios-angle-smoke/tools -p 'test_*.py' -v
+```
+
+Tests cover plan-only/no-download behavior, Windows build rejection, locked
+framework inventory, unsupported CPUs/platforms/deployment, SDK TAPI metadata,
+dependency/rpath rejection, signatures, unsigned IPA round trips and tampering.
+Synthetic Mach-O fixtures are validator tests, never evidence of an Apple build.
+
+Latest workflow Windows validation: **52 ANGLE host tests passed**, including
+11 opt-in decision/workflow wiring tests. Python AST and all ten workflow Bash
+scripts (`bash -n`, including the one-line helper invocation) passed. Initial
+implementation checks also passed the unchanged Vulkan smoke suite (76), Zink
+capability suite (43), JSON/plist parsing, local documentation links and whitespace
+checks. No YAML parser/actionlint, native C++ compiler,
+Xcode or iphoneos SDK was available locally. Workflow structure was reviewed;
+GitHub's workflow evaluation and both Apple build gates remain untested. The
+Windows test runner used an existing embedded Python 3.12 runtime without
+installing anything. Temporary synthetic IPA fixtures were removed by the tests;
+there is no compiled application or installable IPA from this local validation.
+
+Physical acceptance: install on iPhone 16 Plus, export actual ANGLE/Metal/ES3
+identity, observe changing clear and triangle, operate both DS4 buttons, reconnect
+while held, rotate both landscape orientations, and background/foreground several
+times. Check errors, updated pixel dimensions, swap counters, CPU intervals and
+thermal trend during a longer run. Use Instruments/Metal capture for actual
+display/GPU timing and unexpected passes; no battery/30 FPS guarantee is made.
+Stop on unsupported identity, missing symbols/resources, framework signing failure,
+context loss or presentation errors. Resolve the specific blocker before adding
+textures, OSG or engine integration.

@@ -2,3 +2,4 @@ build/
 artifacts/
 deps/
 __pycache__/
+device-results/
