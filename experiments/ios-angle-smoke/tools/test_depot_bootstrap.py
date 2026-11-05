@@ -142,10 +142,16 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(set(versions), {"gn", "ninja", "angle_python"})
 
     def test_main_bootstraps_before_sync_with_self_update_still_disabled(self):
+        self.assert_main_bootstraps_before_sync(self.root)
+
+    def assert_main_bootstraps_before_sync(self, root):
         class StopAtSync(Exception):
             pass
 
-        workspace, output = self.root / "work", self.root / "package"
+        # main() resolves these paths. On macOS tempfile may return /var/...,
+        # which resolves to /private/var/...; raw string comparisons then miss
+        # the gclient call even though both paths identify the same directory.
+        workspace, output = (root / "work").resolve(), (root / "package").resolve()
         calls = []
 
         def fake_process(command, *, cwd, env, **kwargs):
@@ -153,30 +159,70 @@ class BootstrapTests(unittest.TestCase):
             self.assertTrue(kwargs["check"])
             self.assertEqual(env["DEPOT_TOOLS_UPDATE"], "0")
             depot = workspace / "depot_tools"
+            value = ""
             if command[:2] == ["git", "init"]:
                 depot.mkdir()
-            if command[0] == "bash":
+            elif command[:3] == ["git", "remote", "add"] or command[:2] in (
+                    ["git", "fetch"], ["git", "checkout"]):
+                self.assertEqual(cwd, depot)
+            elif command[:3] == ["git", "rev-parse", "HEAD"]:
+                self.assertEqual(cwd, depot, "This fixture stops before ANGLE revision checks")
+                value = self.pin
+            elif command[0] == "bash":
+                self.assertEqual(cwd, depot)
                 interpreter = depot / "bootstrap-fixture_bin/python3/bin/python3"
                 interpreter.parent.mkdir(parents=True)
                 interpreter.write_bytes(b"fixture")
                 (depot / "python3_bin_reldir.txt").write_text("bootstrap-fixture_bin/python3/bin", encoding="utf-8")
-            if command[0] == str(depot / "gclient"):
+            elif command == [str(depot / "python-bin/python3"), "--version"]:
+                self.assertEqual(cwd, depot)
+                value = "Python 3.11.8"
+            elif command[0] == str(depot / "gclient"):
+                self.assertEqual(cwd, workspace)
                 self.assertEqual(command[1], "sync")
                 self.assertIn("--nohooks", command)
                 raise StopAtSync()
-            value = self.pin if command[:3] == ["git", "rev-parse", "HEAD"] else "Python 3.11.8"
+            else:
+                self.fail(f"Unexpected mocked command: {command!r} cwd={cwd!r}")
             return subprocess.CompletedProcess(command, 0, stdout=value + "\n")
 
         with patch("platform.system", return_value="Darwin"), \
                 patch("shutil.disk_usage", return_value=SimpleNamespace(free=30 * 1024**3)), \
                 patch("subprocess.run", side_effect=fake_process), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(StopAtSync):
-                build_angle.main(["--workspace", str(workspace), "--output", str(output), "--allow-downloads"])
+                build_angle.main(["--workspace", str(root / "work"), "--output", str(root / "package"), "--allow-downloads"])
         bootstrap_index = next(i for i, command in enumerate(calls) if command[0] == "bash")
         probe_index = next(i for i, command in enumerate(calls) if Path(command[0]).parts[-2:] == ("python-bin", "python3"))
         self.assertLess(bootstrap_index, probe_index)
         self.assertLess(probe_index, len(calls) - 1)
         self.assertTrue(calls[-1][0].endswith("gclient"))
+
+    def test_main_bootstrap_fixture_handles_an_aliased_temporary_directory(self):
+        # Reproduce macOS /var -> /private/var on any host. Windows junctions
+        # provide the same resolve() behavior without requiring symlink privilege.
+        target, alias = self.root / "canonical", self.root / "alias"
+        target.mkdir()
+        junction = False
+        try:
+            alias.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            if os.name != "nt":
+                self.skipTest("Host cannot create a directory symlink")
+            import _winapi
+            create_junction = getattr(_winapi, "CreateJunction", None)
+            if create_junction is None:
+                self.skipTest("Host cannot create a directory junction")
+            create_junction(str(target), str(alias))
+            junction = True
+        try:
+            self.assertNotEqual(str(alias), str(alias.resolve()))
+            self.assertEqual(alias.resolve(), target.resolve())
+            self.assert_main_bootstraps_before_sync(alias)
+        finally:
+            if junction:
+                alias.rmdir()
+            else:
+                alias.unlink()
 
 
 if __name__ == "__main__":
