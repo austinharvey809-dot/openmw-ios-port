@@ -1,6 +1,6 @@
 # iOS ANGLE Metal smoke: independent Gates 0 and 1
 
-This **uncompiled implementation** targets the iPhone 16 Plus, iOS 18+, ARM64
+This isolated implementation targets the iPhone 16 Plus, iOS 18+, ARM64
 device SDK. It does not modify or consume the Vulkan cube, Zink experiment,
 OpenMW, SDL, OpenSceneGraph or GL4ES. No game assets or signing material belong
 here. A CI pass will establish compilation/package evidence, not rendering or FPS.
@@ -22,8 +22,9 @@ command unless `--allow-downloads` is supplied, and rejects a non-macOS build ho
 even with that option. No CI is launched by these scripts outside an opted-in
 GitHub workflow or an explicit local invocation.
 
-Still unverified: pinned standalone GN generation, the complete device framework
-closure, hosted runner resource sufficiency, Xcode app compilation, Sideloadly
+Reported run #6 completed GN generation and all 560 ANGLE compilation tasks for
+iOS ARM64, then failed the rpath validator as described below. Still unverified:
+completion of device dependency validation/packaging, Xcode app compilation, Sideloadly
 framework signing/installation, and physical ES3/Metal behavior. A hook, missing
 resource, unsigned-framework requirement or upstream build assertion failure is
 a Gate 0 blocker to investigate, not permission to change platforms/backends.
@@ -149,6 +150,31 @@ alternate GL/Vulkan providers, signatures, symlinks and unresolved libraries. It
 records `lipo`, `vtool`, `nm`, `otool -L`, dependency metadata and package hashes.
 The app resolver checks that inventory and rejects modified/incomplete packages.
 Unsigned is intentional: sign the complete bundle locally for installation.
+
+Gate 0's framework rpath allowlist is exact: `@loader_path`, `@loader_path/..`,
+`@executable_path/Frameworks`, and `@loader_path/Frameworks`. The last entry was
+missing when reported run #6 (`f210d32`) finished 560 compilation tasks and then
+failed our validator. Both `/Frameworks` entries are emitted by
+[`ios_shared_library_flags` in the pinned Chromium build revision](https://chromium.googlesource.com/chromium/src/build/+/5987c5fc2c176d5c1329de0832c6b3c28b3638f8/config/ios/BUILD.gn).
+Accepting that entry corrects our validator; no framework binary or install name
+is rewritten, and no dependency or revision check is bypassed.
+
+For `Payload/IOSANGLESmoke.app/Frameworks/libEGL.framework/libEGL`,
+`@executable_path/Frameworks` means the app's shared `Frameworks` directory.
+`@loader_path/Frameworks` means `Frameworks/libEGL.framework/Frameworks` inside the
+app; it does **not** mean the sibling framework directory. It is legal to retain
+this upstream search entry even when that nested directory does not exist. Its
+presence alone neither requires nested frameworks nor proves dependency resolution.
+Gate 0 still requires exact `@rpath/<framework>.framework/<executable>` install
+names, exact known peer-framework dependency IDs or checked public SDK libraries,
+and the existing iOS/ARM64/deployment/unsigned framework properties. Host absolute
+rpaths, unknown tokens, bare relative paths, added suffixes and traversal variants
+remain rejected. Gate 1's packager separately resolves the actual app load graph
+through its real rpaths and requires every bundled dependency to resolve; the app
+links with `@executable_path/Frameworks`. Missing dependencies still fail rather
+than treating a loader-relative path as the app root. Synthetic host regression
+tests cover these cases; real Gate 0 completion and Gate 1 loading remain pending
+the next opted-in macOS build and eventual device run.
 
 All fetched `LICENSE*`, `COPYING*`, `NOTICE*` and `README.chromium` files are retained
 under original paths in `Licenses/`; ANGLE's BSD-style license is mandatory. This
@@ -296,8 +322,10 @@ framework inventory, unsupported CPUs/platforms/deployment, SDK TAPI metadata,
 dependency/rpath rejection, signatures, unsigned IPA round trips and tampering.
 Synthetic Mach-O fixtures are validator tests, never evidence of an Apple build.
 
-Latest Windows validation: **62 ANGLE host tests passed**, including 10 depot_tools
-bootstrap regressions and 11 opt-in decision/workflow wiring tests. Python AST,
+Latest Windows validation: **70 ANGLE host tests passed**, including seven rpath
+regressions, 11 depot_tools bootstrap tests and 11 opt-in decision/workflow wiring
+tests. The unchanged Vulkan smoke suite (76) and Zink capability suite (43) also
+passed, for **189 host tests**. Python AST,
 the bootstrap Bash command and all ten workflow Bash
 scripts (`bash -n`, including the one-line helper invocation) passed. Initial
 implementation checks also passed the unchanged Vulkan smoke suite (76), Zink

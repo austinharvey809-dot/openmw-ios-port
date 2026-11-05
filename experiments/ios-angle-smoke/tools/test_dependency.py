@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import build_angle
-from package_ios import Entry, ValidationError, validate_bundle
+from package_ios import Entry, ValidationError, expand_path, validate_bundle
 from test_package_ios import binary, bundle, EXECUTABLE
 from validate_dependency import frameworks, resolve, ROOT
 
@@ -91,6 +91,102 @@ class DependencyTests(unittest.TestCase):
         self.write("Frameworks/libEGL.framework/libEGL", binary(filetype=6,
             install_name="@rpath/libEGL.framework/libEGL", rpaths=["/tmp/host-libs"]))
         with self.assertRaisesRegex(ValidationError, "runtime search"): frameworks(self.root)
+
+    def test_chromium_device_framework_rpaths_and_peer_dependency_accepted(self):
+        rpaths = ["@executable_path/Frameworks", "@loader_path/Frameworks"]
+        for name in ("libEGL", "libGLESv2"):
+            self.write(f"Frameworks/{name}.framework/{name}", binary(filetype=6,
+                install_name=f"@rpath/{name}.framework/{name}", rpaths=rpaths,
+                dependencies=["@rpath/libGLESv2.framework/libGLESv2"] if name == "libEGL" else []))
+        products = frameworks(self.root)
+        self.assertEqual(len(products), 2)
+        for _, details in products.values():
+            self.assertEqual(details["rpaths"], rpaths)  # Validate, never rewrite upstream binaries.
+        self.hashes()
+        with tempfile.TemporaryDirectory() as directory:
+            resolve(self.root, Path(directory) / "resolved.cmake")
+
+    def test_existing_exact_framework_rpaths_remain_accepted(self):
+        for runpath in ("@loader_path", "@loader_path/..", "@executable_path/Frameworks", "@loader_path/Frameworks"):
+            with self.subTest(runpath=runpath):
+                self.write("Frameworks/libEGL.framework/libEGL", binary(filetype=6,
+                    install_name="@rpath/libEGL.framework/libEGL", rpaths=[runpath]))
+                self.assertEqual(len(frameworks(self.root)), 2)
+
+    def test_framework_rpath_allowlist_rejects_host_unsafe_and_prefix_variants(self):
+        for runpath in ("/tmp/host-libs", "/opt/homebrew/lib", "/usr/lib",
+                        "/Users/runner/work/build", "/Applications/Xcode.app/Frameworks",
+                        "Frameworks", "@rpath/Frameworks", "@unknown/Frameworks",
+                        "@loader_path/Frameworks/..", "@loader_path/Frameworks/extra",
+                        "@loader_path/../../../../outside", "@executable_path/Frameworks/../..",
+                        "@executable_path/Frameworks-extra", "@loader_path\\Frameworks"):
+            with self.subTest(runpath=runpath):
+                self.write("Frameworks/libEGL.framework/libEGL", binary(filetype=6,
+                    install_name="@rpath/libEGL.framework/libEGL",
+                    rpaths=["@executable_path/Frameworks", runpath]))
+                with self.assertRaisesRegex(ValidationError, "runtime search paths"):
+                    frameworks(self.root)
+
+    def test_accepted_rpaths_do_not_relax_install_names(self):
+        for name in (None, "@rpath/libEGL.dylib", "@rpath/libGLESv2.framework/libGLESv2",
+                     "@loader_path/libEGL", "/tmp/libEGL.framework/libEGL",
+                     "@rpath/libEGL.framework/Versions/A/libEGL"):
+            with self.subTest(name=name):
+                self.write("Frameworks/libEGL.framework/libEGL", binary(filetype=6, install_name=name,
+                    rpaths=["@executable_path/Frameworks", "@loader_path/Frameworks"]))
+                with self.assertRaisesRegex(ValidationError, "install name"):
+                    frameworks(self.root)
+
+    def test_accepted_rpaths_do_not_relax_dependencies(self):
+        for dependency in ("@rpath/Missing.framework/Missing", "@rpath/libGLESv2.dylib",
+                           "@loader_path/../libGLESv2.framework/libGLESv2",
+                           "/opt/homebrew/lib/libEGL.dylib",
+                           "/System/Library/Frameworks/OpenGLES.framework/OpenGLES",
+                           "@rpath/MoltenVK.framework/MoltenVK"):
+            with self.subTest(dependency=dependency):
+                self.write("Frameworks/libEGL.framework/libEGL", binary(filetype=6,
+                    install_name="@rpath/libEGL.framework/libEGL", dependencies=[dependency],
+                    rpaths=["@executable_path/Frameworks", "@loader_path/Frameworks"]))
+                with self.assertRaises(ValidationError): frameworks(self.root)
+
+    def test_accepted_rpaths_do_not_relax_device_binary_or_plist_checks(self):
+        for options in ({"platform": 1}, {"platform": 7}, {"cpu": 0x01000007}, {"minimum": 0x1A0000},
+                        {"extra": (struct.pack("<IIII", 0x1D, 16, 0, 0),)}):
+            with self.subTest(options=options):
+                self.write("Frameworks/libEGL.framework/libEGL", binary(filetype=6,
+                    install_name="@rpath/libEGL.framework/libEGL",
+                    rpaths=["@executable_path/Frameworks", "@loader_path/Frameworks"], **options))
+                with self.assertRaises(ValidationError): frameworks(self.root)
+        self.write("Frameworks/libEGL.framework/libEGL", binary(filetype=6,
+            install_name="@rpath/libEGL.framework/libEGL",
+            rpaths=["@executable_path/Frameworks", "@loader_path/Frameworks"]))
+        plist_path = self.root / "Frameworks/libEGL.framework/Info.plist"
+        info = plistlib.loads(plist_path.read_bytes())
+        for platforms in (["iPhoneSimulator"], ["MacOSX"]):
+            with self.subTest(platforms=platforms):
+                plist_path.write_bytes(plistlib.dumps(dict(info, CFBundleSupportedPlatforms=platforms)))
+                with self.assertRaisesRegex(ValidationError, "not iPhoneOS"): frameworks(self.root)
+
+    def test_application_resolves_angle_peers_without_treating_loader_path_as_app_root(self):
+        egl, gles = "Frameworks/libEGL.framework/libEGL", "Frameworks/libGLESv2.framework/libGLESv2"
+        paths = ["@executable_path/Frameworks", "@loader_path/Frameworks"]
+        files = bundle(dependencies=["@rpath/libEGL.framework/libEGL"], rpaths=["@executable_path/Frameworks"])
+        files[egl] = Entry(binary(filetype=6, install_name="@rpath/libEGL.framework/libEGL", rpaths=paths,
+                                  dependencies=["@rpath/libGLESv2.framework/libGLESv2"]), EXECUTABLE)
+        files[gles] = Entry(binary(filetype=6, install_name="@rpath/libGLESv2.framework/libGLESv2", rpaths=paths), EXECUTABLE)
+        report = validate_bundle(files)
+        self.assertEqual({(item["loader"], item["target"]) for item in report["dependencies"]},
+                         {("IOSANGLESmoke", egl), (egl, gles)})
+        self.assertEqual(expand_path("@executable_path/Frameworks", egl), "Frameworks")
+        self.assertEqual(expand_path("@loader_path/Frameworks", egl), "Frameworks/libEGL.framework/Frameworks")
+        # Reach EGL directly, with no inherited app rpath. The loader-only search
+        # location must not be silently replaced by the sibling framework folder.
+        files["IOSANGLESmoke"] = Entry(binary(dependencies=["@executable_path/" + egl]), EXECUTABLE)
+        files[egl] = Entry(binary(filetype=6, install_name="@rpath/libEGL.framework/libEGL",
+                                  rpaths=["@loader_path/Frameworks"],
+                                  dependencies=["@rpath/libGLESv2.framework/libGLESv2"]), EXECUTABLE)
+        with self.assertRaisesRegex(ValidationError, "Unresolved bundled dependency"):
+            validate_bundle(files)
 
     def test_changed_backend_configuration_or_lock_is_rejected(self):
         self.write("args.gn", b'angle_enable_gl = true\n')

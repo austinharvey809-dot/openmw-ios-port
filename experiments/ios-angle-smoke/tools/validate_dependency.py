@@ -12,6 +12,12 @@ from package_ios import MACHO_MAGIC, check_sdk, macho, require, system_dependenc
 
 ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN = ("OpenGLES.framework", "OpenGL.framework", "MoltenVK", "libvulkan", "GL4ES")
+# Exact entries only. Chromium's pinned ios_shared_library_flags supplies the
+# two /Frameworks entries. The loader-relative one need not exist in our flat
+# package: it is a search location, not proof that a dependency resolves there.
+ALLOWED_FRAMEWORK_RPATHS = frozenset({
+    "@loader_path", "@loader_path/..", "@executable_path/Frameworks", "@loader_path/Frameworks",
+})
 
 
 def frameworks(root):
@@ -43,7 +49,7 @@ def frameworks(root):
         for dependency in details["dependencies"]:
             require(not any(name in dependency for name in FORBIDDEN), f"Alternate graphics provider: {dependency}")
             require(dependency in result or dependency.startswith(("/usr/lib/", "/System/Library/Frameworks/")), f"Unbundled dependency: {dependency}")
-        require(all(path in ("@loader_path", "@loader_path/..", "@executable_path/Frameworks") for path in details["rpaths"]),
+        require(all(path in ALLOWED_FRAMEWORK_RPATHS for path in details["rpaths"]),
                 f"Unexpected framework runtime search paths: {details['rpaths']}")
     known = {binary.resolve() for binary, _ in result.values()}
     for path in (root / "Frameworks").rglob("*"):
