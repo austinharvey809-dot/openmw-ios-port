@@ -21,7 +21,8 @@ class AngleHeaderTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"nonempty inventory fixture, not compiler declarations\n")
         self.extensions = self.root / "include/GLES2/gl2ext.h"
-        self.extensions.write_text('#define GL_SHADER_KHR 0x82E1\n#define GL_PROGRAM_KHR 0x82E2\n', encoding='utf-8')
+        self.extensions.write_text('#define GL_SHADER_KHR 0x82E1\n#define GL_PROGRAM_KHR 0x82E2\n'
+                                   '#define GL_BUFFER_KHR 0x82E0\n', encoding='utf-8')
 
     def test_selected_core_and_shared_extension_header_exist_without_gl3ext(self):
         self.assertFalse((self.root / "include/GLES3/gl3ext.h").exists())
@@ -42,6 +43,16 @@ class AngleHeaderTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, token):
                         check(self.root, 'GLES3', self.headers)
             self.extensions.write_text(original, encoding='utf-8')
+
+    def test_missing_buffer_identifier_cli_fails_explicitly(self):
+        self.extensions.write_text('#define GL_SHADER_KHR 0x82E1\n#define GL_PROGRAM_KHR 0x82E2\n', encoding='utf-8')
+        with contextlib.redirect_stderr(io.StringIO()) as error:
+            with self.assertRaises(SystemExit) as status:
+                main(['--root', str(self.root), '--profile', 'GLES3',
+                      '--header', self.headers[0], '--header', self.headers[1]])
+        self.assertEqual(status.exception.code, 1)
+        self.assertIn('GL_BUFFER_KHR', error.getvalue())
+        self.assertIn('0x82e0', error.getvalue())
 
     def test_every_selected_and_transitive_header_is_required(self):
         for name in (*SELECTED, *DEPENDENCIES):

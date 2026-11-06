@@ -1,4 +1,4 @@
-"""Source-specific shader/program KHR_debug aliases; no downloaded fixtures."""
+"""Source-specific shader/program/buffer KHR_debug aliases; no downloaded fixtures."""
 from pathlib import Path
 import json
 import shutil
@@ -15,7 +15,8 @@ from prepare_osg import LOCK, ROOT, overlay
 class ShaderLabelTests(unittest.TestCase):
     def test_aliases_are_only_their_own_source_properties_in_osg_target_directory(self):
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-        for source, token in (('Shader.cpp', 'GL_SHADER'), ('Program.cpp', 'GL_PROGRAM')):
+        for source, token in (('Shader.cpp', 'GL_SHADER'), ('Program.cpp', 'GL_PROGRAM'),
+                              ('BufferObject.cpp', 'GL_BUFFER')):
             assignment = (f'set_property(SOURCE "${{OSG_SOURCE}}/src/osg/{source}" TARGET_DIRECTORY osg\n'
                           f'    APPEND PROPERTY COMPILE_DEFINITIONS "{token}={token}_KHR")')
             with self.subTest(source=source):
@@ -32,14 +33,15 @@ class ShaderLabelTests(unittest.TestCase):
     def test_native_probe_requires_the_khr_token_and_exact_identifier_value(self):
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         probe = cmake.split('function(check_angle_gl_header_types)', 1)[1].split('endfunction()', 1)[0]
-        self.assertIn('set(CMAKE_REQUIRED_DEFINITIONS "-DGL_SHADER=GL_SHADER_KHR" "-DGL_PROGRAM=GL_PROGRAM_KHR")', probe)
+        self.assertIn('set(CMAKE_REQUIRED_DEFINITIONS "-DGL_SHADER=GL_SHADER_KHR" "-DGL_PROGRAM=GL_PROGRAM_KHR" "-DGL_BUFFER=GL_BUFFER_KHR")', probe)
         self.assertIn('static_assert(GL_SHADER_KHR == 0x82E1 && GL_SHADER == GL_SHADER_KHR,', probe)
         self.assertIn('static_assert(GL_PROGRAM_KHR == 0x82E2 && GL_PROGRAM == GL_PROGRAM_KHR,', probe)
+        self.assertIn('static_assert(GL_BUFFER_KHR == 0x82E0 && GL_BUFFER == GL_BUFFER_KHR,', probe)
         self.assertIn('unset(OSG_ANGLE_GLES3_HEADER_TYPES_OK CACHE)', probe)
 
     def test_no_new_source_overlay_or_relaxed_source_inventory(self):
         self.assertEqual(set(LOCK['source_sha256']), {'CMakeLists.txt', 'src/osg/GLExtensions.cpp'})
-        for source in ('Shader.cpp', 'Program.cpp'):
+        for source in ('Shader.cpp', 'Program.cpp', 'BufferObject.cpp'):
             with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'Unaudited overlay file'):
                 overlay('src/osg/' + source, 'original')
         with tempfile.TemporaryDirectory() as directory:
@@ -47,7 +49,7 @@ class ShaderLabelTests(unittest.TestCase):
             (source / 'ios-osg-overlay.json').write_text(json.dumps({
                 'revision': LOCK['revision'], 'overlay_version': LOCK['overlay_version'],
                 'files': dict(LOCK['source_sha256'])}), encoding='utf-8')
-            for name in ('Shader.cpp', 'Program.cpp'):
+            for name in ('Shader.cpp', 'Program.cpp', 'BufferObject.cpp'):
                 changed = '\n'.join([*LOCK['source_sha256'], 'src/osg/' + name])
                 with patch('check_osg_source.subprocess.run', side_effect=[
                         SimpleNamespace(stdout=LOCK['revision']), SimpleNamespace(stdout=changed)]):
@@ -70,7 +72,7 @@ void label(Extensions* _extensions, unsigned int handle, Object* object) {
 '''
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'shader-label.cpp'
-            for token, value in (('GL_SHADER', '0x82E1'), ('GL_PROGRAM', '0x82E2')):
+            for token, value in (('GL_SHADER', '0x82E1'), ('GL_PROGRAM', '0x82E2'), ('GL_BUFFER', '0x82E0')):
                 body = template.replace('TOKEN', token)
                 for name, header, alias, expected in (
                         ('original missing core token', f'#define {token}_KHR {value}\n', False, False),

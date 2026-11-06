@@ -1,11 +1,11 @@
 # OSG over ANGLE/Metal: isolated iPhone scene proof
 
 Status: **partial native compilation; no successful OSG IPA or device run yet**.
-Run #4 (`9b265df6bb`) passed ANGLE restoration, header validation, the native
-C++11 probe and configuration. The user confirmed the Shader.cpp alias worked
-and its compiler command contained `-DGL_SHADER=GL_SHADER_KHR`. The local Gate 1
-diagnostic ZIP contains one compiler error, now in `Program.cpp` on `GL_PROGRAM`.
-The Program.cpp fix below awaits a native build. The separate
+Run #5 (`42157375105`, commit `a198301`) passed dependency restoration, header
+validation, the native C++11 probe and CMake/Xcode generation. Both shader and
+program aliases worked (per-source compiler definitions confirmed by the user).
+The local Gate 1 ZIP contains one compiler error: `BufferObject.cpp` on `GL_BUFFER`.
+The buffer fix below awaits a native build. The separate
 `ios-angle-smoke` app is the user-confirmed physical-device baseline (workflow
 #12). Its source, controller code, packaging scripts and workflow are unchanged.
 This experiment needs its own successful CI build, IPA validation and iPhone run.
@@ -124,17 +124,59 @@ Offline evidence: `ios-osg-angle-gate-1-42155332093.zip` in the local Downloads
 directory confirms the Program.cpp error and successful old probe. Its configure
 log records `GLES2/gl2ext.h` SHA-256
 `53c564985d35b7ca4b744a0a8b81f120aa0c114c319b3b98d3223bf599bc815b`.
-The ZIP contains logs, not the header text or the full OSG source. Consequently,
-**the exact pinned artifact's GL_PROGRAM_KHR declaration has not been independently
-verified locally**; the new mandatory checks must establish that in the next
-manual native build before the alias is used. The standard constant value and
-synthetic test headers are not claimed as artifact verification.
+The ZIP contains logs, not the header text or the full OSG source. At this fix's
+implementation, the exact pinned artifact's GL_PROGRAM_KHR declaration was not
+independently verified locally. Run #5 subsequently passed the mandatory actual
+artifact preflight and native probe: its configure log reports shader/program
+values 33505/33506 (`0x82E1`/`0x82E2`). Synthetic test headers are not artifact
+verification.
 
 Locally available debugObjectLabel references are the reported shader/program
 error excerpts, configuration and regression fixtures, not a full fork checkout.
-There is no concrete evidence of another missing label identifier, so no other
-compatibility definitions are added. Source-integrity regressions now explicitly
-check that modifications to either Shader.cpp or Program.cpp remain forbidden.
+No additional alias was justified at that stage. Run #5 now supplies concrete
+buffer-label evidence, as documented below.
+
+### Run #5 buffer debug-label fix and bounded call-site audit
+
+The sole build-log error is `src/osg/BufferObject.cpp:207`, at
+`_extensions->debugObjectLabel(GL_BUFFER, _glObjectID, _bufferObject->getName())`.
+This is the same core/KHR identifier spelling mismatch, not a buffer allocation
+or GPU data-upload failure. CMake now defines **`GL_BUFFER=GL_BUFFER_KHR` only for
+`BufferObject.cpp`, using `TARGET_DIRECTORY osg`** after the OSG target exists.
+The original fetched source, object/name arguments, runtime debug-support checks,
+shader compilation, program linking and buffer operations are unchanged.
+
+The already hash-validated ANGLE artifact's actual `GLES2/gl2ext.h` must now also
+define `GL_BUFFER_KHR` exactly once as `0x82E0`. The native C++11 probe separately
+asserts that value and the alias equality after preprocessing. Both checks run
+before CMake permits the BufferObject.cpp compile definition. The exact buffer
+declaration is **not yet verified against an available pinned header locally**;
+the diagnostic ZIP does not contain header text. Missing or wrong declarations
+must stop configuration, never cause a fabricated header or backend fallback.
+
+The offline bounded audit searched this repository (including ignored experiment
+directories), the existing cached reference tree under
+`%TEMP%/openmw-ios-renderer-audit-20261103`, and the three available OSG Gate 1
+diagnostic ZIPs in Downloads. No full pinned OSG source files or ANGLE headers
+were found in these locations. Compiler excerpts provide these exact usages:
+
+| Available pinned-source excerpt | Identifier | Evidence/status |
+| --- | --- | --- |
+| `Shader.cpp:757` | `GL_SHADER` | Earlier error excerpt; source alias and actual KHR declaration/probe passed build #5. |
+| `Program.cpp:830` | `GL_PROGRAM` | Earlier error excerpt; source alias and actual KHR declaration/probe passed build #5. |
+| `BufferObject.cpp:207` | `GL_BUFFER` | Sole build #5 error; new source alias gated by pending artifact/native verification. |
+
+No other demonstrably incompatible debugObjectLabel identifier was found in the
+available source excerpts. **This is not a complete audit of the unavailable
+pinned checkout**, and a single compiler error cannot prove other translation
+units are compatible. Further call sites must be inspected from that exact
+checkout or exported source evidence before adding more aliases. No speculative
+mapping is added for other GL object types.
+
+Source-integrity tests explicitly reject modifications to Shader.cpp, Program.cpp
+and BufferObject.cpp. The two original overlay files, SHA-256 checks, dependency
+revisions and overlay version 1 remain unchanged. The UIKit/EGL owner, Metal
+presentation and single-threaded OSG traversal are untouched.
 
 Seven OSG libraries are built statically: OpenThreads, osg, osgUtil, osgDB, osgGA,
 osgText and osgViewer. The top-level OSG project is configured with `EXCLUDE_FROM_ALL`;
@@ -333,7 +375,20 @@ unsigned IPA/SDK/Mach-O regressions. These synthetic checks do not compile OSG o
 validate native rendering. Completing the native macOS-hosted iPhone build is
 the next required gate.
 
-Program-label follow-up: the OSG suite ran 59 tests (58 passed, one optional C++
+Buffer-label follow-up: the OSG suite ran 60 tests (59 passed, one optional C++
+compiler fixture skipped). Regressions now cover all three source-specific aliases,
+native-probe values, rejection of fetched-source edits and invalid/missing buffer
+definitions. A dedicated CLI regression checks the explicit missing-buffer error.
+The synthetic compiler fixture includes buffer alias success and missing/wrong
+KHR declarations, but cannot run without a local compiler. Native OSG compilation
+and runtime debug-label behavior remain unverified for this change.
+The unchanged suites also passed: ANGLE 76 passed/one compiler-fixture skip,
+Vulkan 76 passed and Zink 43 passed: **254 passes, two skips** overall.
+All 32 tool Python files passed AST parsing; OSG JSON/plist, unchanged locks,
+changed-file whitespace and experiment-only change-scope checks passed. No local
+native compilation, download, CI run, commit or push was performed.
+
+Previous program-label follow-up: the OSG suite ran 59 tests (58 passed, one optional C++
 compiler fixture skipped). The fixture now covers both shader and program tokens.
 The extra header regression rejects missing, wrong, commented-out, duplicate and
 indirect definitions for each identifier. Native artifact checks remain pending.

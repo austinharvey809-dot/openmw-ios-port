@@ -10,7 +10,7 @@ SELECTED = ("GLES3/gl3.h", "GLES2/gl2ext.h")
 # Dependencies of the selected GL core header and the app/OSG EGL entry points.
 # gl2ext.h consumes the types/macros from the preceding gl3.h; it is not gl2.h.
 DEPENDENCIES = ("GLES3/gl3platform.h", "KHR/khrplatform.h", "EGL/egl.h", "EGL/eglext.h", "EGL/eglplatform.h")
-LABEL_IDENTIFIERS = {"GL_SHADER_KHR": 0x82E1, "GL_PROGRAM_KHR": 0x82E2}
+LABEL_IDENTIFIERS = {"GL_SHADER_KHR": 0x82E1, "GL_PROGRAM_KHR": 0x82E2, "GL_BUFFER_KHR": 0x82E0}
 
 
 def check(root, profile, headers):

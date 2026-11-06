@@ -47,14 +47,15 @@ function(check_angle_gl_header_types)
     set(CMAKE_REQUIRED_INCLUDES "${ANGLE_ROOT}/include")
     set(CMAKE_REQUIRED_LIBRARIES "")
     # Match the translation-unit-specific definitions below. Verify the actual
-    # restored ANGLE headers before applying either shader/program label alias.
-    set(CMAKE_REQUIRED_DEFINITIONS "-DGL_SHADER=GL_SHADER_KHR" "-DGL_PROGRAM=GL_PROGRAM_KHR")
+    # restored ANGLE headers before applying any shader/program/buffer label alias.
+    set(CMAKE_REQUIRED_DEFINITIONS "-DGL_SHADER=GL_SHADER_KHR" "-DGL_PROGRAM=GL_PROGRAM_KHR" "-DGL_BUFFER=GL_BUFFER_KHR")
     unset(OSG_ANGLE_GLES3_HEADER_TYPES_OK CACHE)
     check_cxx_source_compiles("${OPENGL_HEADER1}
 ${OPENGL_HEADER2}
 static_assert(sizeof(GLint64) == 8 && sizeof(GLuint64) == 8, \"GLES3 64-bit types\");
 static_assert(GL_SHADER_KHR == 0x82E1 && GL_SHADER == GL_SHADER_KHR, \"KHR shader label identifier\");
 static_assert(GL_PROGRAM_KHR == 0x82E2 && GL_PROGRAM == GL_PROGRAM_KHR, \"KHR program label identifier\");
+static_assert(GL_BUFFER_KHR == 0x82E0 && GL_BUFFER == GL_BUFFER_KHR, \"KHR buffer label identifier\");
 int main() {
     PFNGLGENVERTEXARRAYSPROC core = nullptr;
     PFNGLGENVERTEXARRAYSOESPROC extension = nullptr;
@@ -99,6 +100,10 @@ set_property(SOURCE "${OSG_SOURCE}/src/osg/Shader.cpp" TARGET_DIRECTORY osg
 # preflight and native probe above must verify GL_PROGRAM_KHR before this alias.
 set_property(SOURCE "${OSG_SOURCE}/src/osg/Program.cpp" TARGET_DIRECTORY osg
     APPEND PROPERTY COMPILE_DEFINITIONS "GL_PROGRAM=GL_PROGRAM_KHR")
+# Run #5: BufferObject.cpp has the same core/KHR debug-label spelling mismatch.
+# Both artifact preflight and native probe must verify the buffer identifier.
+set_property(SOURCE "${OSG_SOURCE}/src/osg/BufferObject.cpp" TARGET_DIRECTORY osg
+    APPEND PROPERTY COMPILE_DEFINITIONS "GL_BUFFER=GL_BUFFER_KHR")
 if(NOT OSG_GLES3_AVAILABLE OR OSG_GL1_AVAILABLE OR OSG_GL2_AVAILABLE OR OSG_GL3_AVAILABLE
    OR NOT OSG_WINDOWING_SYSTEM STREQUAL "None")
     message(FATAL_ERROR "OSG profile/window configuration did not remain GLES3/None")
