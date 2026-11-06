@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from check_angle_headers import check, main, SELECTED, DEPENDENCIES
+from check_angle_headers import check, main, SELECTED, DEPENDENCIES, LABEL_IDENTIFIERS
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,12 +20,28 @@ class AngleHeaderTests(unittest.TestCase):
             path = self.root / "include" / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"nonempty inventory fixture, not compiler declarations\n")
+        self.extensions = self.root / "include/GLES2/gl2ext.h"
+        self.extensions.write_text('#define GL_SHADER_KHR 0x82E1\n#define GL_PROGRAM_KHR 0x82E2\n', encoding='utf-8')
 
     def test_selected_core_and_shared_extension_header_exist_without_gl3ext(self):
         self.assertFalse((self.root / "include/GLES3/gl3ext.h").exists())
         result = check(self.root, "GLES3", self.headers)
         self.assertEqual(result["selected_headers"], ["GLES3/gl3.h", "GLES2/gl2ext.h"])
         self.assertEqual(set(result["header_sha256"]), set(SELECTED + DEPENDENCIES))
+        self.assertEqual(result["label_identifiers"], LABEL_IDENTIFIERS)
+
+    def test_actual_extension_header_requires_each_exact_label_identifier(self):
+        original = self.extensions.read_text(encoding='utf-8')
+        for token, expected in LABEL_IDENTIFIERS.items():
+            definition = f'#define {token} 0x{expected:X}'
+            for replacement in ('', f'#define {token} 0xFFFF',
+                                f'// {definition}', f'#define {token} OTHER_TOKEN',
+                                definition + '\n' + definition):
+                with self.subTest(token=token, replacement=replacement):
+                    self.extensions.write_text(original.replace(definition, replacement), encoding='utf-8')
+                    with self.assertRaisesRegex(ValueError, token):
+                        check(self.root, 'GLES3', self.headers)
+            self.extensions.write_text(original, encoding='utf-8')
 
     def test_every_selected_and_transitive_header_is_required(self):
         for name in (*SELECTED, *DEPENDENCIES):
