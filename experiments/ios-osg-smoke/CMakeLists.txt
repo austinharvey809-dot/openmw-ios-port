@@ -32,7 +32,36 @@ set(EGL_LIBRARY "${ANGLE_EGL_LIBRARY}" CACHE FILEPATH "" FORCE)
 set(OPENGL_INCLUDE_DIR "${ANGLE_ROOT}/include" CACHE PATH "" FORCE)
 set(CMAKE_REQUIRED_INCLUDES "${ANGLE_ROOT}/include")
 set(OPENGL_HEADER1 "#include <GLES3/gl3.h>" CACHE STRING "" FORCE)
-set(OPENGL_HEADER2 "#include <GLES3/gl3ext.h>" CACHE STRING "" FORCE)
+set(OPENGL_HEADER2 "#include <GLES2/gl2ext.h>" CACHE STRING "" FORCE)
+# Khronos/ANGLE shares GLES extension declarations under GLES2; there is no
+# GLES3/gl3ext.h in the pinned artifact. Check the selected files, not host SDKs.
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_angle_headers.py"
+    --root "${ANGLE_ROOT}" --profile "${OPENGL_PROFILE}"
+    --header "${OPENGL_HEADER1}" --header "${OPENGL_HEADER2}" COMMAND_ERROR_IS_FATAL ANY)
+function(check_angle_gl_header_types)
+    include(CheckCXXSourceCompiles)
+    # A header-only static compile check requires no signing or GL linking.
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    set(CMAKE_CXX_STANDARD 11)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_REQUIRED_INCLUDES "${ANGLE_ROOT}/include")
+    set(CMAKE_REQUIRED_LIBRARIES "")
+    unset(OSG_ANGLE_GLES3_HEADER_TYPES_OK CACHE)
+    check_cxx_source_compiles("${OPENGL_HEADER1}
+${OPENGL_HEADER2}
+static_assert(sizeof(GLint64) == 8 && sizeof(GLuint64) == 8, \"GLES3 64-bit types\");
+int main() {
+    PFNGLGENVERTEXARRAYSPROC core = nullptr;
+    PFNGLGENVERTEXARRAYSOESPROC extension = nullptr;
+    GLint64EXT signedExtension = 0;
+    GLuint64EXT unsignedExtension = 0;
+    return core || extension || signedExtension || unsignedExtension;
+}" OSG_ANGLE_GLES3_HEADER_TYPES_OK)
+    if(NOT OSG_ANGLE_GLES3_HEADER_TYPES_OK)
+        message(FATAL_ERROR "Selected ANGLE GLES3/extension declarations failed to compile; inspect CMake configure logs")
+    endif()
+endfunction()
+check_angle_gl_header_types()
 set(OSG_WINDOWING_SYSTEM "None" CACHE STRING "" FORCE)
 set(DYNAMIC_OPENSCENEGRAPH OFF CACHE BOOL "" FORCE)
 set(DYNAMIC_OPENTHREADS OFF CACHE BOOL "" FORCE)

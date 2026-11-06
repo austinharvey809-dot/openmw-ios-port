@@ -47,7 +47,7 @@ Verified source at that revision:
 | --- | --- |
 | `CMakeLists.txt`, `OPENGL_PROFILE` | `GLES3` enables `OSG_GLES3_AVAILABLE`, removes fixed-function features. Configure only this profile, never GL2/GLCORE. |
 | `CMakeLists.txt`, iPhone branches | `OSG_BUILD_PLATFORM_IPHONE=ON` assumes Xcode.app, SDK 10.2, minimum 7.0, mixed device/simulator defaults, Apple's OpenGLES and forced IOS windowing. Set device-only SDK/ARM64/minimum 18.0 explicitly, and overlay the three hard-coded provider/window/SDK assignments. |
-| `src/osg/GL.in` and root header settings | Apple defaults to `<OpenGLES/ES3/gl.h>`. Set the documented CMake cache header strings to ANGLE `<GLES3/gl3.h>` / `<GLES3/gl3ext.h>`; pass its include path to compile checks. No GL.in patch is needed. |
+| `src/osg/GL.in` and root header settings | Apple defaults to `<OpenGLES/ES3/gl.h>`. Set the CMake cache header strings to ANGLE `<GLES3/gl3.h>` / `<GLES2/gl2ext.h>`; pass its include path to compile checks. No GL.in patch is needed. |
 | `src/osg/GLExtensions.cpp` | Apple branch uses global `dlopen`/`dlsym`; replace provider selection only for this experiment with `eglGetProcAddress`, including core-function availability probes at runtime. No global resolver fallback. |
 | `include/osgViewer/GraphicsWindow` | Embedded window creates State/context bookkeeping and has no-op current/swap implementations. Use only with the already-current external EGL context. |
 | `src/osg/State.cpp`, `include/osg/Program` | Default aliases can be compact; select the explicit noncompact mapping. Enable supplied matrix uniforms and inspect the actual per-context program link status. |
@@ -67,6 +67,42 @@ only the app and its real target closure are built. Plugins, examples, applicati
 deprecated serializers and shared OSG libraries are disabled. Optional image/font/
 compression dependencies are disabled; native Cocoa/Carbon/IOS/X11 window modules
 are excluded by windowing None. No broad OSG install target is invoked.
+
+### GLES header preflight
+
+OSG-over-ANGLE run #2 reached native compilation but failed on our configured
+`GLES3/gl3ext.h`. This was an experiment configuration error, not a missing `-I`
+flag, incomplete Gate 0 export or a mandatory OSG filename. The pinned ANGLE
+[`include/GLES3`](https://github.com/google/angle/tree/6ea96bcca6d7f05199f5565c6d5c4722af7269da/include/GLES3)
+inventory contains `gl3.h`, `gl31.h`, `gl32.h` and `gl3platform.h`, but no
+`gl3ext.h`. The unchanged builder copies the entire include tree. The pinned OSG
+template simply inserts `OPENGL_HEADER1` and `OPENGL_HEADER2`; its non-Apple GLES3
+default uses `GLES3/gl3.h` with an empty second header.
+
+The intended pair is now **`GLES3/gl3.h` then `GLES2/gl2ext.h`**. The first supplies
+ES3 core types/functions and platform macros. ANGLE's shared Khronos GLES extension
+declarations live in the second, including OES vertex-array function pointer types
+and extended 64-bit types; it consumes the preceding core declarations. Including
+this file does not select a GLES2 context or establish runtime extension support.
+No empty shim, GLES3.1/3.2 header upgrade, Apple OpenGLES include or source-overlay
+change is used. `OPENGL_PROFILE` remains exactly GLES3.
+
+Before adding OSG's CMake subdirectory, `check_angle_headers.py` checks the actual
+restored artifact, not the host SDK: both selected headers, `GLES3/gl3platform.h`,
+`KHR/khrplatform.h`, `EGL/egl.h`, `EGL/eglext.h` and `EGL/eglplatform.h` must exist,
+be nonempty and resolve inside the artifact include root. Wrong profiles, header
+orders, alternate providers or invalid selections fail explicitly. This follows
+the existing full artifact hash verification; it does not replace it. Header
+hashes are printed to the configure log. `gl2ext.h` does not require importing
+the GLES2 core header (`gl2.h`) or an additional extension platform header.
+
+A fresh, scoped CMake static-library compile probe then includes the exact selected
+pair and tests ES3 64-bit and core/OES VAO declarations. It requires neither GL
+linking nor signing and aborts configuration on a declaration mismatch. No cached
+positive result is trusted. The actual generated `osg/GL`, complete OSG compilation,
+further extension API compatibility and runtime rendering still require the next
+opted-in macOS build and device run; host file-inventory fixtures do not prove
+native header compatibility.
 
 The app uses the same iPhoneOS/ARM64/minimum-18.0 and final-rpath CMake policies as
 the working app. Only ANGLE's two untouched frameworks are embedded. OSG archives
@@ -219,10 +255,10 @@ scene/context ownership contracts, required OSG provenance and the inherited
 unsigned IPA/SDK/Mach-O regressions. These synthetic checks do not compile OSG or
 validate native rendering. The first real macOS build is the next required gate.
 
-Local results: 47 OSG-experiment tests passed, including seven artifact-handoff
-regressions. Existing ANGLE/Vulkan/Zink suites
+Local results: 54 OSG-experiment tests passed, including seven header-selection
+regressions and seven artifact-handoff regressions. Existing ANGLE/Vulkan/Zink suites
 also passed (76/76/43 tests respectively), with the existing ANGLE C++ compiler
-fixture skipped on this Windows host: **242 passes, one skip** overall. Python
+fixture skipped on this Windows host: **249 passes, one skip** overall. Python
 syntax, JSON/plist parsing, all 11 new workflow Bash scripts, documentation links,
 new-file whitespace and baseline-preservation checks passed. No local Xcode,
 iphoneos SDK, CMake/native compiler or actionlint/YAML parser was available. The
@@ -237,4 +273,4 @@ Files added (no existing files changed):
 | `experiments/ios-osg-smoke/` | `.gitignore`, `CMakeLists.txt`, `Info.plist.in`, `README.md` |
 | `data/` | `angle-lock.json` (unchanged copy), `osg-lock.json` |
 | `src/` | `main.mm` (independent adapted UIKit harness), `OSGScene.hpp` |
-| `tools/` | `prepare_osg.py`, `check_osg_source.py`, `package_ios.py`, `workflow_opt_in.py`, `test_integration.py`, `test_package_ios.py`, `test_artifact_handoff.py` |
+| `tools/` | `prepare_osg.py`, `check_osg_source.py`, `check_angle_headers.py`, `package_ios.py`, `workflow_opt_in.py`, `test_integration.py`, `test_package_ios.py`, `test_artifact_handoff.py`, `test_angle_headers.py` |
