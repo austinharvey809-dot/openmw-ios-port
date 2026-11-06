@@ -125,7 +125,8 @@ void main() { result = vec4(color,1.0); }
         auto getDisplay = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(eglGetProcAddress("eglGetPlatformDisplayEXT"));
         if (!getDisplay) throw std::runtime_error("eglGetPlatformDisplayEXT unavailable");
         const EGLint attributes[] = { EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE, EGL_NONE };
-        display = getDisplay(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, attributes);
+        // EXT platform API takes void*, while Apple's EGL_DEFAULT_DISPLAY is int.
+        display = getDisplay(EGL_PLATFORM_ANGLE_ANGLE, nullptr, attributes);
         if (display == EGL_NO_DISPLAY) throw std::runtime_error("Metal platform display unavailable; no fallback permitted");
         EGLint major = 0, minor = 0;
         CheckEGL(eglInitialize(display, &major, &minor), "eglInitialize");

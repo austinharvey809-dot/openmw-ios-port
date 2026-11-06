@@ -28,10 +28,12 @@ foreach(_framework UIKit Foundation QuartzCore Metal GameController)
     find_library(SMOKE_${_framework} NAMES ${_framework} REQUIRED)
     target_link_libraries(IOSANGLESmoke PRIVATE "${SMOKE_${_framework}}")
 endforeach()
+set(_angle_bundle_id "org.openmw.experiments.ios-angle-smoke")
 set_target_properties(IOSANGLESmoke PROPERTIES
     OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED YES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
-    MACOSX_BUNDLE_GUI_IDENTIFIER "org.openmw.experiments.ios-angle-smoke"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "${_angle_bundle_id}"
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${_angle_bundle_id}"
     MACOSX_BUNDLE_BUNDLE_NAME "iOS ANGLE Smoke"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     MACOSX_BUNDLE_BUNDLE_VERSION "1"
