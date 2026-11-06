@@ -102,6 +102,28 @@ preserved in `.github/workflows/ios-angle-smoke.yml`.
    ANGLE artifact from the same run and preserves preparation/configuration/build/
    packaging logs even if native compilation fails.
 
+The ANGLE builder's `--output` is **`$RUNNER_TEMP/angle-ios-arm64`**, a directory;
+the builder does not choose the workflow's artifact upload directory. The workflow
+creates `experiments/ios-osg-smoke/artifacts/angle-ios-arm64.tar.gz` with exactly
+one package root, `angle-ios-arm64/`. All three uploads use the job's
+`${{ env.EXPERIMENT }}/artifacts/` and fail if no files exist. The first OSG run
+incorrectly retained `experiments/ios-angle-smoke/artifacts/` in all three copied
+upload steps; that also threatened lightweight logs and the eventual Gate 1 IPA.
+
+The Gate 0 artifact name remains `ios-osg-angle-gate-0-${{ github.run_id }}`.
+Gate 1 downloads that same artifact into `dependency-artifact/`, checks its
+`angle-ios-arm64.tar.gz` is nonempty, and extracts it into `$RUNNER_TEMP`. This
+restores exactly the `-DANGLE_ROOT="$RUNNER_TEMP/angle-ios-arm64"` consumed by CMake.
+The package retains `Frameworks/` (EGL/GLES bundles and resources), `include/`,
+`Licenses/`, `angle-lock.json`, `angle-build.json`, `args.gn`, `gclient-revinfo.txt`,
+`dependency-validation.json` and `package-hashes.json`. The unchanged ANGLE resolver
+verifies the producer package before archiving and the restored package **before
+OSG source download**, checking device frameworks, pins, inventory and every hash.
+Archive listings and both validation logs are uploaded with diagnostics. Synthetic
+host tar round trips exercise this layout; actual Actions transport still needs
+the next opted-in run. The download name/path and extraction root were already
+correct; no changes to the working ANGLE workflow or builder were needed.
+
 ANGLE's multi-GB download, 20 GiB disk preflight and runner requirements still
 apply. This workflow currently rebuilds it for a deliberate run, rather than
 silently trusting an unrelated old artifact. The OSG shallow checkout/build adds
@@ -197,9 +219,10 @@ scene/context ownership contracts, required OSG provenance and the inherited
 unsigned IPA/SDK/Mach-O regressions. These synthetic checks do not compile OSG or
 validate native rendering. The first real macOS build is the next required gate.
 
-Local results: 40 OSG-experiment tests passed. Existing ANGLE/Vulkan/Zink suites
+Local results: 47 OSG-experiment tests passed, including seven artifact-handoff
+regressions. Existing ANGLE/Vulkan/Zink suites
 also passed (76/76/43 tests respectively), with the existing ANGLE C++ compiler
-fixture skipped on this Windows host: **235 passes, one skip** overall. Python
+fixture skipped on this Windows host: **242 passes, one skip** overall. Python
 syntax, JSON/plist parsing, all 11 new workflow Bash scripts, documentation links,
 new-file whitespace and baseline-preservation checks passed. No local Xcode,
 iphoneos SDK, CMake/native compiler or actionlint/YAML parser was available. The
@@ -214,4 +237,4 @@ Files added (no existing files changed):
 | `experiments/ios-osg-smoke/` | `.gitignore`, `CMakeLists.txt`, `Info.plist.in`, `README.md` |
 | `data/` | `angle-lock.json` (unchanged copy), `osg-lock.json` |
 | `src/` | `main.mm` (independent adapted UIKit harness), `OSGScene.hpp` |
-| `tools/` | `prepare_osg.py`, `check_osg_source.py`, `package_ios.py`, `workflow_opt_in.py`, `test_integration.py`, `test_package_ios.py` |
+| `tools/` | `prepare_osg.py`, `check_osg_source.py`, `package_ios.py`, `workflow_opt_in.py`, `test_integration.py`, `test_package_ios.py`, `test_artifact_handoff.py` |

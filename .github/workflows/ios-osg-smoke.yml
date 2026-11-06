@@ -56,8 +56,8 @@ jobs:
         if: always()
         with:
           name: ios-osg-angle-lightweight-${{ github.run_id }}
-          path: experiments/ios-angle-smoke/artifacts/
-          if-no-files-found: warn
+          path: ${{ env.EXPERIMENT }}/artifacts/
+          if-no-files-found: error
           retention-days: 14
 
   gate-0-dependency:
@@ -100,7 +100,12 @@ jobs:
           python3 -u experiments/ios-angle-smoke/tools/build_angle.py --workspace "$RUNNER_TEMP/angle-work" \
             --output "$RUNNER_TEMP/angle-ios-arm64" --allow-downloads --jobs 3 \
             2>&1 | tee "$EXPERIMENT/artifacts/gate-0-build.log"
+          python3 experiments/ios-angle-smoke/tools/validate_dependency.py \
+            --root "$RUNNER_TEMP/angle-ios-arm64" --resolve "$EXPERIMENT/artifacts/angle-produced.cmake" \
+            2>&1 | tee "$EXPERIMENT/artifacts/angle-produced-validation.log"
           tar -czf "$EXPERIMENT/artifacts/angle-ios-arm64.tar.gz" -C "$RUNNER_TEMP" angle-ios-arm64
+          test -s "$EXPERIMENT/artifacts/angle-ios-arm64.tar.gz" || { echo '::error::Missing or empty ANGLE dependency archive'; exit 1; }
+          tar -tzf "$EXPERIMENT/artifacts/angle-ios-arm64.tar.gz" > "$EXPERIMENT/artifacts/angle-archive-contents.txt"
           echo 'Gate 0 passed: ARM64 iPhoneOS products validated. No device runtime claim.' >> "$GITHUB_STEP_SUMMARY"
       - name: Record Gate 0 failure
         if: failure()
@@ -123,7 +128,7 @@ jobs:
         if: always()
         with:
           name: ios-osg-angle-gate-0-${{ github.run_id }}
-          path: experiments/ios-angle-smoke/artifacts/
+          path: ${{ env.EXPERIMENT }}/artifacts/
           if-no-files-found: error
           retention-days: 14
 
@@ -149,7 +154,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$EXPERIMENT/artifacts"
+          test -s dependency-artifact/angle-ios-arm64.tar.gz || { echo '::error::Downloaded artifact lacks the ANGLE dependency archive'; exit 1; }
           tar -xzf dependency-artifact/angle-ios-arm64.tar.gz -C "$RUNNER_TEMP"
+          python3 experiments/ios-angle-smoke/tools/validate_dependency.py \
+            --root "$RUNNER_TEMP/angle-ios-arm64" --resolve "$EXPERIMENT/artifacts/angle-restored.cmake" \
+            2>&1 | tee "$EXPERIMENT/artifacts/angle-restored-validation.log"
           {
             xcodebuild -version
             xcrun --sdk iphoneos --show-sdk-version
@@ -196,6 +205,6 @@ jobs:
         if: always()
         with:
           name: ios-osg-angle-gate-1-${{ github.run_id }}
-          path: experiments/ios-angle-smoke/artifacts/
-          if-no-files-found: warn
+          path: ${{ env.EXPERIMENT }}/artifacts/
+          if-no-files-found: error
           retention-days: 14
