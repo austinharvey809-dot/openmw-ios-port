@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import build_angle
-from package_ios import Entry, ValidationError, expand_path, validate_bundle
+from package_ios import Entry, ValidationError, expand_path, validate_bundle, validate_ipa, write_ipa
 from test_package_ios import binary, bundle, EXECUTABLE
 from validate_dependency import frameworks, resolve, ROOT
 
@@ -187,6 +187,64 @@ class DependencyTests(unittest.TestCase):
                                   dependencies=["@rpath/libGLESv2.framework/libGLESv2"]), EXECUTABLE)
         with self.assertRaisesRegex(ValidationError, "Unresolved bundled dependency"):
             validate_bundle(files)
+
+    def angle_application_bundle(self):
+        files = bundle(dependencies=["@rpath/libEGL.framework/libEGL", "@rpath/libGLESv2.framework/libGLESv2"],
+                       rpaths=["@executable_path/Frameworks"])
+        for name in ("libEGL", "libGLESv2"):
+            files[f"Frameworks/{name}.framework/{name}"] = Entry(binary(filetype=6,
+                install_name=f"@rpath/{name}.framework/{name}",
+                dependencies=["@rpath/libGLESv2.framework/libGLESv2"] if name == "libEGL" else [],
+                rpaths=["@executable_path/Frameworks", "@loader_path/Frameworks"]), EXECUTABLE)
+        return files
+
+    def test_distributable_angle_bundle_preserves_framework_ids_paths_and_ipa_closure(self):
+        files = self.angle_application_bundle()
+        report = validate_bundle(files)
+        self.assertEqual(report["binaries"]["IOSANGLESmoke"]["rpaths"], ["@executable_path/Frameworks"])
+        for name in ("libEGL", "libGLESv2"):
+            path = f"Frameworks/{name}.framework/{name}"
+            self.assertEqual(report["binaries"][path]["install_name"], f"@rpath/{name}.framework/{name}")
+            self.assertEqual(report["binaries"][path]["rpaths"],
+                             ["@executable_path/Frameworks", "@loader_path/Frameworks"])
+        self.assertEqual({item["target"] for item in report["dependencies"]},
+                         {"Frameworks/libEGL.framework/libEGL", "Frameworks/libGLESv2.framework/libGLESv2"})
+        ipa = self.root / "angle-unsigned.ipa"
+        write_ipa(files, ipa)
+        reopened = validate_ipa(ipa, expected=files)
+        self.assertEqual(reopened["binaries"], report["binaries"])
+
+    def test_runner_rpaths_are_rejected_in_executable_and_each_embedded_framework(self):
+        report = validate_bundle(self.angle_application_bundle())
+        runner = "/Users/runner/work/_temp/angle-ios-arm64/Frameworks"
+        for loader, details in report["binaries"].items():
+            with self.subTest(loader=loader):
+                files = self.angle_application_bundle()
+                files[loader] = Entry(binary(filetype=details["filetype"], install_name=details["install_name"],
+                    dependencies=details["dependencies"], rpaths=details["rpaths"] + [runner]), EXECUTABLE)
+                with self.assertRaisesRegex(ValidationError, "Unsupported/non-bundled runpath"):
+                    validate_bundle(files)
+
+    def test_runner_dependency_references_are_rejected_in_all_angle_bundle_binaries(self):
+        report = validate_bundle(self.angle_application_bundle())
+        dependency = "/Users/runner/work/_temp/angle-ios-arm64/Frameworks/libGLESv2.framework/libGLESv2"
+        for loader, details in report["binaries"].items():
+            with self.subTest(loader=loader):
+                files = self.angle_application_bundle()
+                files[loader] = Entry(binary(filetype=details["filetype"], install_name=details["install_name"],
+                    dependencies=[dependency], rpaths=details["rpaths"]), EXECUTABLE)
+                with self.assertRaisesRegex(ValidationError, "Unexpected host dependency"):
+                    validate_bundle(files)
+
+    def test_missing_or_misplaced_angle_framework_is_not_found_via_a_build_directory(self):
+        original = "Frameworks/libGLESv2.framework/libGLESv2"
+        for destination in (None, "libGLESv2.framework/libGLESv2", "Frameworks/Other.framework/libGLESv2"):
+            with self.subTest(destination=destination):
+                files = self.angle_application_bundle()
+                entry = files.pop(original)
+                if destination:
+                    files[destination] = entry
+                with self.assertRaises(ValidationError): validate_bundle(files)
 
     def test_changed_backend_configuration_or_lock_is_rejected(self):
         self.write("args.gn", b'angle_enable_gl = true\n')

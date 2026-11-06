@@ -23,14 +23,19 @@ target_compile_features(IOSANGLESmoke PRIVATE cxx_std_17)
 target_compile_options(IOSANGLESmoke PRIVATE -fobjc-arc -Wall -Wextra)
 target_include_directories(IOSANGLESmoke SYSTEM PRIVATE "${ANGLE_ROOT}/include")
 target_link_libraries(IOSANGLESmoke PRIVATE "${ANGLE_EGL_LIBRARY}" "${ANGLE_GLES_LIBRARY}")
-target_link_options(IOSANGLESmoke PRIVATE "-Wl,-rpath,@executable_path/Frameworks")
 foreach(_framework UIKit Foundation QuartzCore Metal GameController)
     find_library(SMOKE_${_framework} NAMES ${_framework} REQUIRED)
     target_link_libraries(IOSANGLESmoke PRIVATE "${SMOKE_${_framework}}")
 endforeach()
 set(_angle_bundle_id "org.openmw.experiments.ios-angle-smoke")
+# CI packages the build-tree app, without cmake --install. Use its final runtime
+# path now; CMake's default build rpath otherwise includes ANGLE_ROOT/Frameworks.
+# Absolute framework link/search paths remain necessary at build time only.
 set_target_properties(IOSANGLESmoke PROPERTIES
     OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED YES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "@executable_path/Frameworks"
+    INSTALL_RPATH_USE_LINK_PATH FALSE
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
     MACOSX_BUNDLE_GUI_IDENTIFIER "${_angle_bundle_id}"
     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${_angle_bundle_id}"

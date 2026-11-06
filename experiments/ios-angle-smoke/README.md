@@ -22,9 +22,9 @@ command unless `--allow-downloads` is supplied, and rejects a non-macOS build ho
 even with that option. No CI is launched by these scripts outside an opted-in
 GitHub workflow or an explicit local invocation.
 
-Reported run #6 completed GN generation and all 560 ANGLE compilation tasks for
-iOS ARM64, then failed the rpath validator as described below. Still unverified:
-completion of device dependency validation/packaging, Xcode app compilation, Sideloadly
+Reported run #8 passed Gate 0's dependency build and validation. Run #10 also
+compiled the native app, then failed IPA validation on an absolute build-machine
+rpath as described below. Still unverified: successful unsigned IPA packaging, Sideloadly
 framework signing/installation, and physical ES3/Metal behavior. A hook, missing
 resource, unsigned-framework requirement or upstream build assertion failure is
 a Gate 0 blocker to investigate, not permission to change platforms/backends.
@@ -173,8 +173,41 @@ remain rejected. Gate 1's packager separately resolves the actual app load graph
 through its real rpaths and requires every bundled dependency to resolve; the app
 links with `@executable_path/Frameworks`. Missing dependencies still fail rather
 than treating a loader-relative path as the app root. Synthetic host regression
-tests cover these cases; real Gate 0 completion and Gate 1 loading remain pending
-the next opted-in macOS build and eventual device run.
+tests cover these cases; actual app loading remains pending the eventual device
+run.
+
+The app must also avoid CMake's automatically generated **build-tree** rpath.
+Gate 1 links absolute validated framework binaries from
+`$RUNNER_TEMP/angle-ios-arm64/Frameworks`. Those paths legitimately supply
+link-time framework search information (`FRAMEWORK_SEARCH_PATHS`/`-F`). Because
+the framework install names begin with `@rpath`, CMake also normally adds their
+directory to the build-tree runtime search path, emitted by its Xcode generator
+as `LD_RUNPATH_SEARCH_PATHS` and ultimately Mach-O `LC_RPATH`. That is the source
+of run #10's `/Users/runner/work/_temp/angle-ios-arm64/Frameworks` failure; our
+explicit relative linker option did not suppress the automatic entry.
+
+CI packages the build-tree `.app` without running `cmake --install`. The app target
+therefore now sets `BUILD_WITH_INSTALL_RPATH=TRUE`,
+`INSTALL_RPATH=@executable_path/Frameworks`, and
+`INSTALL_RPATH_USE_LINK_PATH=FALSE`, using CMake's runtime-path model instead of
+an additional raw `-rpath` flag. See CMake's
+[build-with-install-rpath](https://cmake.org/cmake/help/latest/prop_tgt/BUILD_WITH_INSTALL_RPATH.html)
+and [build-rpath](https://cmake.org/cmake/help/latest/prop_tgt/BUILD_RPATH.html)
+documentation. This changes the application's runtime search path, while keeping
+the absolute build-time link inputs. It does not rename or rewrite framework
+install names, dependency references, resources or upstream framework rpaths.
+Frameworks are still copied intact into `.app/Frameworks`, and Gate 0 checks and
+hashes their dependency identities before the app resolver accepts them.
+
+The IPA validator is unchanged: it examines the executable **and every reachable
+embedded library**, rejects host absolute rpaths/dependency references, resolves
+actual bundled dependencies and rejects unreferenced native libraries. Regression
+fixtures inject the runner path into each binary separately and verify rejection,
+as well as checking missing/misplaced frameworks and a valid IPA round trip. Host
+configuration tests check the CMake target policy; actual generated Xcode settings,
+the real bundle's Mach-O load commands and IPA success still require an opted-in
+macOS run. No `install_name_tool` patching, path whitelist exception or validator
+relaxation is used.
 
 All fetched `LICENSE*`, `COPYING*`, `NOTICE*` and `README.chromium` files are retained
 under original paths in `Licenses/`; ANGLE's BSD-style license is mandatory. This
@@ -311,7 +344,8 @@ fails before Documents logging starts (for example a dyld error).
 
 ## Checks and device acceptance
 
-Host checks require only Python stdlib, no ANGLE checkout:
+Host checks require Python stdlib, no ANGLE checkout. An optional C++ argument-type
+test uses an existing host compiler and is skipped when none is available:
 
 ```sh
 python3 -m unittest discover -s experiments/ios-angle-smoke/tools -p 'test_*.py' -v
@@ -322,17 +356,17 @@ framework inventory, unsupported CPUs/platforms/deployment, SDK TAPI metadata,
 dependency/rpath rejection, signatures, unsigned IPA round trips and tampering.
 Synthetic Mach-O fixtures are validator tests, never evidence of an Apple build.
 
-Latest Windows validation: **70 ANGLE host tests passed**, including seven rpath
-regressions, 11 depot_tools bootstrap tests and 11 opt-in decision/workflow wiring
-tests. The unchanged Vulkan smoke suite (76) and Zink capability suite (43) also
-passed, for **189 host tests**. Python AST,
-the bootstrap Bash command and all ten workflow Bash
-scripts (`bash -n`, including the one-line helper invocation) passed. Initial
+Latest Windows validation: **76 ANGLE host tests passed**, with one C++ compilation
+test skipped because no host compiler is available. This includes configuration
+checks for the CMake runtime-path policy and regressions for each bundled binary.
+The unchanged Vulkan smoke suite (76) and Zink capability suite (43) also passed,
+for **195 passing tests and one skip**. Python AST, plist parsing, changed-file
+whitespace and all ten workflow Bash scripts (`bash -n`) passed. Initial
 implementation checks also passed the unchanged Vulkan smoke suite (76), Zink
 capability suite (43), JSON/plist parsing, local documentation links and whitespace
 checks. No YAML parser/actionlint, native C++ compiler,
 Xcode or iphoneos SDK was available locally. Workflow structure was reviewed;
-GitHub's workflow evaluation and both Apple build gates remain untested. The
+The changed Xcode generation and native binary output still need the macOS runner. The
 Windows test runner used an existing embedded Python 3.12 runtime without
 installing anything. Temporary synthetic IPA fixtures were removed by the tests;
 there is no compiled application or installable IPA from this local validation.

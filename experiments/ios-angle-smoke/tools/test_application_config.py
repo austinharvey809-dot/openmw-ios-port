@@ -12,6 +12,20 @@ HOST_CXX = next((compiler for name in ("clang++", "g++", "c++") if (compiler := 
 
 
 class ApplicationConfigTests(unittest.TestCase):
+    def test_build_tree_app_uses_only_the_bundle_install_rpath(self):
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        properties = re.search(r"set_target_properties\(IOSANGLESmoke PROPERTIES(.*?)\)", cmake, re.S).group(1)
+        self.assertRegex(properties, r'\bBUILD_WITH_INSTALL_RPATH\s+TRUE\b')
+        self.assertRegex(properties, r'\bINSTALL_RPATH\s+"@executable_path/Frameworks"')
+        self.assertRegex(properties, r'\bINSTALL_RPATH_USE_LINK_PATH\s+FALSE\b')
+        # CMake owns runtime-path generation, not an additional raw linker flag.
+        self.assertNotIn("-Wl,-rpath", cmake)
+        self.assertNotIn("XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS", cmake)
+        # Keep the validated link inputs and complete, unmodified bundle copy.
+        self.assertIn('target_link_libraries(IOSANGLESmoke PRIVATE "${ANGLE_EGL_LIBRARY}" "${ANGLE_GLES_LIBRARY}")', cmake)
+        self.assertIn('copy_directory "${ANGLE_ROOT}/Frameworks" "$<TARGET_BUNDLE_DIR:IOSANGLESmoke>/Frameworks"', cmake)
+        self.assertNotIn("install_name_tool", cmake)
+
     def test_plist_and_xcode_use_the_same_bundle_identifier(self):
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         identifier = re.search(r'set\(_angle_bundle_id "([^"]+)"\)', cmake).group(1)
