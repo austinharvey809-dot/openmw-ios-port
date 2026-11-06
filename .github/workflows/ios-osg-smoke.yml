@@ -1,0 +1,201 @@
+name: iOS OSG over ANGLE Metal (unsigned device build)
+
+# Matching pushes run lightweight checks only unless the HEAD commit message
+# contains the exact token [run-osg]. Dispatch requires default-branch registration.
+on:
+  push:
+    branches: [ios-port]
+    paths:
+      - experiments/ios-osg-smoke/**
+      - experiments/ios-angle-smoke/tools/**
+      - experiments/ios-angle-smoke/data/angle-lock.json
+      - experiments/ios-angle-smoke/args.gn
+      - .github/workflows/ios-osg-smoke.yml
+  workflow_dispatch:
+    inputs:
+      build_dependencies:
+        description: Opt in to the large ANGLE device dependency download and build
+        type: boolean
+        default: false
+      build_application:
+        description: Also build Gate 1 after Gate 0 passes
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+# Do not let an ordinary validation push cancel an explicitly requested build.
+
+jobs:
+  lightweight-validation:
+    if: github.ref == 'refs/heads/ios-port'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run_expensive: ${{ steps.opt-in.outputs.run_expensive }}
+      build_application: ${{ steps.opt-in.outputs.build_application }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPERIMENT: experiments/ios-osg-smoke
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Evaluate explicit build opt-in from event JSON
+        id: opt-in
+        run: python3 "$EXPERIMENT/tools/workflow_opt_in.py"
+      - name: Run host validation tests without dependency downloads
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXPERIMENT/artifacts"
+          python3 -m unittest discover -s "$EXPERIMENT/tools" -p 'test_*.py' -v \
+            2>&1 | tee "$EXPERIMENT/artifacts/lightweight-tests.log"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-osg-angle-lightweight-${{ github.run_id }}
+          path: experiments/ios-angle-smoke/artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  gate-0-dependency:
+    needs: lightweight-validation
+    if: github.ref == 'refs/heads/ios-port' && needs.lightweight-validation.outputs.run_expensive == 'true'
+    runs-on: macos-26
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPERIMENT: experiments/ios-osg-smoke
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record toolchain and run host tests before downloads
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXPERIMENT/artifacts"
+          {
+            git rev-parse HEAD
+            sw_vers
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-path
+            cmake --version
+            python3 --version
+            df -h "$RUNNER_TEMP"
+            printf 'Runner: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$EXPERIMENT/artifacts/toolchain.log"
+          python3 -m unittest discover -s "$EXPERIMENT/tools" -p 'test_*.py' -v \
+            2>&1 | tee "$EXPERIMENT/artifacts/host-tests.log"
+          python3 experiments/ios-angle-smoke/tools/build_angle.py --workspace "$RUNNER_TEMP/angle-work" \
+            --output "$RUNNER_TEMP/angle-ios-arm64" > "$EXPERIMENT/artifacts/dependency-plan.json"
+      - name: Gate 0 - fetch pinned graph and build device EGL GLES Metal frameworks
+        run: |
+          set -euo pipefail
+          python3 -u experiments/ios-angle-smoke/tools/build_angle.py --workspace "$RUNNER_TEMP/angle-work" \
+            --output "$RUNNER_TEMP/angle-ios-arm64" --allow-downloads --jobs 3 \
+            2>&1 | tee "$EXPERIMENT/artifacts/gate-0-build.log"
+          tar -czf "$EXPERIMENT/artifacts/angle-ios-arm64.tar.gz" -C "$RUNNER_TEMP" angle-ios-arm64
+          echo 'Gate 0 passed: ARM64 iPhoneOS products validated. No device runtime claim.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Record Gate 0 failure
+        if: failure()
+        run: |
+          echo 'Gate 0 FAILED. Inspect logs; do not substitute a macOS/simulator build or claim Metal runtime success.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve GN diagnostics even on dependency failure
+        if: always()
+        run: |
+          mkdir -p "$EXPERIMENT/artifacts"
+          build="$RUNNER_TEMP/angle-work/angle/out/ios-angle-arm64"
+          for file in args.gn build.ninja toolchain.ninja; do
+            if test -f "$build/$file"; then cp "$build/$file" "$EXPERIMENT/artifacts/"; fi
+          done
+          for file in gclient-revinfo.txt angle-build.json dependency-validation.json; do
+            if test -f "$RUNNER_TEMP/angle-ios-arm64/$file"; then
+              cp "$RUNNER_TEMP/angle-ios-arm64/$file" "$EXPERIMENT/artifacts/"
+            fi
+          done
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-osg-angle-gate-0-${{ github.run_id }}
+          path: experiments/ios-angle-smoke/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  gate-1-application:
+    needs: [lightweight-validation, gate-0-dependency]
+    if: github.ref == 'refs/heads/ios-port' && needs.gate-0-dependency.result == 'success' && needs.lightweight-validation.outputs.build_application == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPERIMENT: experiments/ios-osg-smoke
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-osg-angle-gate-0-${{ github.run_id }}
+          path: dependency-artifact
+      - name: Restore independently validated dependency
+        run: |
+          set -euo pipefail
+          mkdir -p "$EXPERIMENT/artifacts"
+          tar -xzf dependency-artifact/angle-ios-arm64.tar.gz -C "$RUNNER_TEMP"
+          {
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+          } 2>&1 | tee "$EXPERIMENT/artifacts/gate-1-toolchain.log"
+      - name: Prepare pinned OSG with bounded ANGLE source overlay
+        run: |
+          set -euo pipefail
+          python3 -u "$EXPERIMENT/tools/prepare_osg.py" --source "$RUNNER_TEMP/osg-source" --allow-downloads \
+            2>&1 | tee "$EXPERIMENT/artifacts/osg-prepare.log"
+          cp "$RUNNER_TEMP/osg-source/ios-osg-overlay.json" "$EXPERIMENT/artifacts/"
+      - name: Configure and compile unsigned device application
+        run: |
+          set -euo pipefail
+          cmake -S "$EXPERIMENT" -B "$EXPERIMENT/build" -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DANGLE_ROOT="$RUNNER_TEMP/angle-ios-arm64" -DOSG_SOURCE="$RUNNER_TEMP/osg-source" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            2>&1 | tee "$EXPERIMENT/artifacts/configure.log"
+          cmake --build "$EXPERIMENT/build" --config Release --target IOSOSGSmoke -- \
+            -jobs 3 CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$EXPERIMENT/artifacts/gate-1-build.log"
+      - name: Validate bundle dependencies and unsigned IPA archive
+        run: |
+          set -euo pipefail
+          app=$(find "$EXPERIMENT/build" -type d -name IOSOSGSmoke.app -print -quit)
+          test -n "$app"
+          xcrun lipo "$app/IOSOSGSmoke" -verify_arch arm64
+          python3 "$EXPERIMENT/tools/package_ios.py" --app "$app" \
+            --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            --output "$EXPERIMENT/artifacts/IOSOSGSmoke-unsigned.ipa" \
+            --report "$EXPERIMENT/artifacts/ipa-validation.json" \
+            2>&1 | tee "$EXPERIMENT/artifacts/packaging.log"
+          python3 "$EXPERIMENT/tools/package_ios.py" \
+            --validate-only "$EXPERIMENT/artifacts/IOSOSGSmoke-unsigned.ipa" \
+            --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            --report "$EXPERIMENT/artifacts/ipa-reopened.json"
+          tar -czf "$EXPERIMENT/artifacts/IOSOSGSmoke-compile-evidence.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
+          echo 'Gate 1 compiled and packaged. Sign/install locally; physical Metal rendering is NOT yet verified.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Record Gate 1 failure
+        if: failure()
+        run: |
+          echo 'Gate 1 FAILED. Gate 0 artifact remains independently available.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-osg-angle-gate-1-${{ github.run_id }}
+          path: experiments/ios-angle-smoke/artifacts/
+          if-no-files-found: warn
+          retention-days: 14

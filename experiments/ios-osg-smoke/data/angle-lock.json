@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "angle_repository": "https://chromium.googlesource.com/angle/angle",
+  "angle_revision": "6ea96bcca6d7f05199f5565c6d5c4722af7269da",
+  "deps_sha256": "95b94ea4563ff092219f790494455411fa05c7f5126f2817be495025801210ca",
+  "depot_tools_repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+  "depot_tools_revision": "816da11f80777dcf8c10bdaa84df18450dcba12a",
+  "minimum_ios": "18.0",
+  "required_deps": {
+    "build": "5987c5fc2c176d5c1329de0832c6b3c28b3638f8",
+    "buildtools": "d0d4c192e3c718016b3a0c5d44ccec632bccfe96",
+    "tools/clang": "8676d782fdba0bc8bbab91cb17d680930d65cf6c"
+  },
+  "cipd_versions_in_deps": {
+    "gn": "git_revision:ed7fee04cb30b96ed40ef188acfad5417349e399",
+    "ninja": "version:3@1.12.1.chromium.4",
+    "cpython3": "version:3@3.11.9.chromium.38",
+    "siso": "git_revision:c508213533aa5cd425b69cb0f66e53522d77022d"
+  },
+  "dependency_policy": "The checksum-locked ANGLE DEPS and its pinned recursive DEPS own the complete transitive graph, CIPD and GCS compiler objects. Save gclient revinfo, tool versions and args.gn with each artifact. No moving ANGLE/depot_tools ref or prebuilt binary mirror.",
+  "xcode_policy": "Selected system Xcode on macos-26; exact version/SDK recorded, not bit reproducible across runner updates. Device-only product validation is mandatory."
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/OpenMW/osg.git",
+  "revision": "9b384d5439977784e5cd250ff8ff7966928ddd27",
+  "minimum_ios": "18.0",
+  "profile": "GLES3",
+  "components": ["OpenThreads", "osg", "osgUtil", "osgDB", "osgGA", "osgText", "osgViewer"],
+  "overlay_version": 1,
+  "source_sha256": {
+    "CMakeLists.txt": "c7f6a0c415da61d0a2f4097f5d55f2ff806743c11b84e25bacffc46d9b545a01",
+    "src/osg/GLExtensions.cpp": "bd2cb7bc27918acc902848fcde5e1ecc03f6530acfe614e38d3d4740f304a7cc"
+  },
+  "license": "OSGPL 0.0 or later, incorporating LGPL; preserve LICENSE.txt and OpenThreads notices. Review linked-source/file-specific notices before distribution."
+}
