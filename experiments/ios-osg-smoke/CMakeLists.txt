@@ -46,10 +46,14 @@ function(check_angle_gl_header_types)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
     set(CMAKE_REQUIRED_INCLUDES "${ANGLE_ROOT}/include")
     set(CMAKE_REQUIRED_LIBRARIES "")
+    # Match the Shader.cpp-only compatibility definition below. GLES KHR_debug
+    # uses the suffixed shader identifier; its value matches core GL_SHADER.
+    set(CMAKE_REQUIRED_DEFINITIONS "-DGL_SHADER=GL_SHADER_KHR")
     unset(OSG_ANGLE_GLES3_HEADER_TYPES_OK CACHE)
     check_cxx_source_compiles("${OPENGL_HEADER1}
 ${OPENGL_HEADER2}
 static_assert(sizeof(GLint64) == 8 && sizeof(GLuint64) == 8, \"GLES3 64-bit types\");
+static_assert(GL_SHADER_KHR == 0x82E1 && GL_SHADER == GL_SHADER_KHR, \"KHR shader label identifier\");
 int main() {
     PFNGLGENVERTEXARRAYSPROC core = nullptr;
     PFNGLGENVERTEXARRAYSOESPROC extension = nullptr;
@@ -84,6 +88,12 @@ add_compile_definitions(OSG_IOS_ANGLE=1)
 # EXCLUDE_FROM_ALL + explicit app dependencies builds only the seven-library
 # viewer closure. No broad install target (which would build other components).
 add_subdirectory("${OSG_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/osg" EXCLUDE_FROM_ALL)
+# Run #3: Shader.cpp uses the core GL_SHADER spelling for debugObjectLabel,
+# but the selected GLES3/KHR headers supply GL_SHADER_KHR. Scope this numeric
+# alias to that translation unit in osg's directory, not other OSG/app sources.
+# Leave the fetched source, runtime debug-support guard and labeling call intact.
+set_property(SOURCE "${OSG_SOURCE}/src/osg/Shader.cpp" TARGET_DIRECTORY osg
+    APPEND PROPERTY COMPILE_DEFINITIONS "GL_SHADER=GL_SHADER_KHR")
 if(NOT OSG_GLES3_AVAILABLE OR OSG_GL1_AVAILABLE OR OSG_GL2_AVAILABLE OR OSG_GL3_AVAILABLE
    OR NOT OSG_WINDOWING_SYSTEM STREQUAL "None")
     message(FATAL_ERROR "OSG profile/window configuration did not remain GLES3/None")

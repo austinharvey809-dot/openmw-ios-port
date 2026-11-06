@@ -1,6 +1,10 @@
 # OSG over ANGLE/Metal: isolated iPhone scene proof
 
-Status: implementation prepared, **not compiled or run on iOS**. The separate
+Status: **partial native compilation; no successful OSG IPA or device run yet**.
+User-reported run #3 (`c4b36a98c4`) passed ANGLE artifact validation, GLES header
+selection and the native C++11 declaration probe, then failed in `Shader.cpp`
+on the missing `GL_SHADER` token. The isolated fix below awaits a new native build.
+The separate
 `ios-angle-smoke` app is the user-confirmed physical-device baseline (workflow
 #12). Its source, controller code, packaging scripts and workflow are unchanged.
 This experiment needs its own successful CI build, IPA validation and iPhone run.
@@ -61,6 +65,38 @@ pinned Git blobs, verifies HEAD and rejects unrelated tracked differences.
 are explicit source adaptations, not claims of stock fork compatibility. They
 are never applied to the engine's `extern` checkout or any working experiment.
 
+### Run #3 shader debug-label identifier fix
+
+The first reported compiler error was `src/osg/Shader.cpp:757`: the existing
+`_extensions->debugObjectLabel(GL_SHADER, _glShaderHandle, _shader->getName())`
+call uses a core GL identifier absent from the selected GLES3 headers. The
+reported pinned ANGLE `GLES2/gl2ext.h` instead declares `GL_SHADER_KHR` as
+`0x82E1`, the same shader-object identifier. This is a declaration spelling
+mismatch, not a shader-language, context-creation or shader-compilation change.
+
+CMake now adds **`GL_SHADER=GL_SHADER_KHR` only to `src/osg/Shader.cpp` in the
+`osg` target directory**. It does not define a project-wide token or change any
+fetched source. The original call, object handle, name and runtime debug-support
+checks remain intact; no debug feature is forced on or disabled. Header presence
+does not establish runtime KHR_debug support. The existing header-only native
+C++11 probe tests this alias and asserts the KHR identifier equals `0x82E1`.
+A missing/wrong declaration still fails configuration without GL linking.
+
+No new source overlay, hash or overlay-version bump is needed: the original two
+audited files and their transformations are unchanged. `check_osg_source.py`
+still rejects any tracked modification to `Shader.cpp`. Existing lock/build
+metadata continues to describe overlay version 1; no dependency pin changes.
+This source-specific compile definition is recorded here and in CMake rather
+than claiming it is a third transformed source file.
+
+This follow-up was performed offline using the reported native error/header
+evidence and local configuration. The full pinned `Shader.cpp` and ANGLE headers
+are not cached locally; no new upstream source checksum has been invented. Tests
+check definition scope, strict source inventory and the native probe. An optional
+C++11 synthetic reproducer checks the original failure, alias success, missing
+KHR token and wrong value when a host compiler is available. It is skipped on
+this Windows host. Full compilation and runtime labeling remain unverified.
+
 Seven OSG libraries are built statically: OpenThreads, osg, osgUtil, osgDB, osgGA,
 osgText and osgViewer. The top-level OSG project is configured with `EXCLUDE_FROM_ALL`;
 only the app and its real target closure are built. Plugins, examples, applications,
@@ -100,9 +136,11 @@ A fresh, scoped CMake static-library compile probe then includes the exact selec
 pair and tests ES3 64-bit and core/OES VAO declarations. It requires neither GL
 linking nor signing and aborts configuration on a declaration mismatch. No cached
 positive result is trusted. The actual generated `osg/GL`, complete OSG compilation,
-further extension API compatibility and runtime rendering still require the next
-opted-in macOS build and device run; host file-inventory fixtures do not prove
-native header compatibility.
+further extension API compatibility and runtime rendering still require native
+compilation and a device run. Run #3 confirmed the selected-header/type probe
+before the shader-label fix; the extended probe and full compilation require the
+next opted-in macOS build. Host file-inventory fixtures do not prove native
+header compatibility.
 
 The app uses the same iPhoneOS/ARM64/minimum-18.0 and final-rpath CMake policies as
 the working app. Only ANGLE's two untouched frameworks are embedded. OSG archives
@@ -253,9 +291,19 @@ python3 -m unittest discover -s experiments/ios-osg-smoke/tools -p 'test_*.py' -
 Tests cover bounded overlays, no-download preparation, source pins, opt-in policy,
 scene/context ownership contracts, required OSG provenance and the inherited
 unsigned IPA/SDK/Mach-O regressions. These synthetic checks do not compile OSG or
-validate native rendering. The first real macOS build is the next required gate.
+validate native rendering. Completing the native macOS-hosted iPhone build is
+the next required gate.
 
-Local results: 54 OSG-experiment tests passed, including seven header-selection
+Shader-label follow-up: the OSG suite ran 58 tests (57 passed, one optional C++
+compiler fixture skipped). ANGLE ran 77 (76 passed, its existing compiler fixture
+skipped), Vulkan 76 passed and Zink 43 passed: **252 passes, two skips** overall.
+All 32 experiment-tool Python files passed AST parsing; OSG JSON/plist parsing,
+changed-file whitespace and unchanged-lock checks passed. No local CMake,
+Xcode/iPhoneOS compiler or actual ANGLE-header compile was available. The next
+manual `[run-osg]` build must validate the extended declaration probe, generated
+Shader.cpp compile definition and remaining native compilation. No CI was started.
+
+Previous header-fix local results: 54 OSG-experiment tests passed, including seven header-selection
 regressions and seven artifact-handoff regressions. Existing ANGLE/Vulkan/Zink suites
 also passed (76/76/43 tests respectively), with the existing ANGLE C++ compiler
 fixture skipped on this Windows host: **249 passes, one skip** overall. Python
