@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import plistlib
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -84,6 +85,42 @@ class IntegrationTests(unittest.TestCase):
         for override in ({'profile': 'GL2'}, {'windowing': 'IOS'}, {'static': False}, {'revision': 'other'}):
             files['osg-build.json'] = Entry(json.dumps(dict(build, **override)).encode(), REGULAR)
             with self.subTest(override=override), self.assertRaises(ValidationError): validate_bundle(files)
+
+    def test_initial_error_checking_is_fine_grained_before_realization(self):
+        scene = (ROOT / 'src/OSGScene.hpp').read_text(encoding='utf-8')
+        self.assertIn('#include <osg/State>', scene)
+        create = scene.index('window = new osgViewer::GraphicsWindowEmbedded(')
+        enable = scene.index('window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_ATTRIBUTE);')
+        self.assertLess(create, enable)
+        self.assertLess(enable, scene.index('window->getState()->setUseModelViewAndProjectionUniforms('))
+        self.assertLess(enable, scene.index('viewer->realize();'))
+        self.assertIn('log->write("OSG GL checking: ONCE_PER_ATTRIBUTE', scene[enable:])
+
+    def test_fine_grained_checks_end_after_the_fifth_completed_osg_frame(self):
+        scene = (ROOT / 'src/OSGScene.hpp').read_text(encoding='utf-8')
+        frame = scene.split('void frame(double time, int w, int h) {', 1)[1].split('~OSGScene()', 1)[0]
+        self.assertLess(frame.index('viewer->frame(time);'), frame.index('++frames;'))
+        self.assertRegex(frame, r'\+\+frames;\s*(?://[^\n]*\n\s*)*if \(frames == 5\) \{\s*'
+                         r'window->getState\(\)->setCheckForGLErrors\(osg::State::ONCE_PER_FRAME\);\s*'
+                         r'log->write\("OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames"\);\s*\}')
+        self.assertEqual(re.findall(r'setCheckForGLErrors\(osg::State::(\w+)\)', scene),
+                         ['ONCE_PER_ATTRIBUTE', 'ONCE_PER_FRAME'])
+        self.assertEqual(scene.count('++frames;'), 1)
+        self.assertEqual(scene.count('frames = 0;'), 1)
+        main = (ROOT / 'src/main.mm').read_text(encoding='utf-8')
+        self.assertIn('if (clearOnly || !sceneAvailable) glClear(', main)
+        self.assertIn('else osgScene->frame(seconds, width, height);', main)
+
+    def test_diagnostics_keep_notification_and_gl_error_reporting_distinct(self):
+        scene = (ROOT / 'src/OSGScene.hpp').read_text(encoding='utf-8')
+        self.assertIn('if (level <= osg::WARN) ++warnings;', scene)
+        self.assertIn('write("OSG[" + std::to_string(level) + "] " + message);', scene)
+        self.assertIn('osg::setNotifyLevel(osg::INFO);', scene)
+        self.assertNotIn('glGetError', scene)
+        self.assertNotIn('glDebugMessageCallback', scene)
+        main = (ROOT / 'src/main.mm').read_text(encoding='utf-8')
+        self.assertIn('result[@"osg_warnings"]', main)
+        self.assertIn('result[@"gl_errors"]', main)
 
     def test_controller_lifecycle_and_timing_labels_remain_in_the_isolated_app(self):
         main = (ROOT / 'src/main.mm').read_text(encoding='utf-8')

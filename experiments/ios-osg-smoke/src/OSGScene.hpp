@@ -7,6 +7,7 @@
 #include <osg/Notify>
 #include <osg/Program>
 #include <osg/Shader>
+#include <osg/State>
 #include <osg/Version>
 #include <osgViewer/GraphicsWindow>
 #include <osgViewer/Viewer>
@@ -19,6 +20,8 @@
 class SceneLog : public osg::NotifyHandler {
 public:
     std::function<void(const std::string&)> write;
+    // WARN-or-higher notifications, not a total GL-error count. OSG's GL
+    // diagnostics may use other severities; every delivered message is logged.
     unsigned warnings = 0;
     explicit SceneLog(std::function<void(const std::string&)> callback) : write(std::move(callback)) {}
     void notify(osg::NotifySeverity level, const char* message) override {
@@ -53,6 +56,8 @@ public:
                 throw std::runtime_error(std::string("OSG ANGLE resolver missing ") + name);
         }
         window = new osgViewer::GraphicsWindowEmbedded(0, 0, 1, 1);
+        window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_ATTRIBUTE);
+        log->write("OSG GL checking: ONCE_PER_ATTRIBUTE for initialization and the first 5 OSG-rendered frames");
         window->getState()->setUseModelViewAndProjectionUniforms(true);
         window->getState()->setUseVertexAttributeAliasing(true);
         window->getState()->resetVertexAttributeAlias(false); // vertex=0, color=3
@@ -127,6 +132,12 @@ void main() { result=color; }
         viewer->frame(time); // advance + event + update + cull/draw traversal
         traversalWallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-begin).count();
         ++frames;
+        // Count completed OSG traversals only; clear-only swaps and suspension
+        // do not spend or restart this temporary diagnostic window.
+        if (frames == 5) {
+            window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_FRAME);
+            log->write("OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames");
+        }
         if (!checkedProgram) {
             auto* pcp = program->getPCP(*window->getState());
             if (!pcp) throw std::runtime_error("OSG did not create a per-context shader program");

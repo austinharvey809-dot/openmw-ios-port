@@ -1,14 +1,70 @@
 # OSG over ANGLE/Metal: isolated iPhone scene proof
 
-Status: **partial native compilation; no successful OSG IPA or device run yet**.
-Run #5 (`42157375105`, commit `a198301`) passed dependency restoration, header
-validation, the native C++11 probe and CMake/Xcode generation. Both shader and
-program aliases worked (per-source compiler definitions confirmed by the user).
-The local Gate 1 ZIP contains one compiler error: `BufferObject.cpp` on `GL_BUFFER`.
-The buffer fix below awaits a native build. The separate
-`ios-angle-smoke` app is the user-confirmed physical-device baseline (workflow
-#12). Its source, controller code, packaging scripts and workflow are unchanged.
-This experiment needs its own successful CI build, IPA validation and iPhone run.
+Status: **compiled, packaged, installed and physically tested on iPhone 16 Plus**
+(user-confirmed). The rotating, depth-tested colored cube rendered with OSG 3.6.5,
+ANGLE Metal on Apple A18, OpenGL ES 3.0 and GLSL ES 3.00. The captured results
+reported 1,632 OSG frames, 1,846 successful EGL swaps and approximately 30.87 swaps
+per active second, with nominal thermal state and no application or shader-link
+failure. Controller operation and foreground recovery were demonstrated.
+Successful swaps are not measured display FPS or a sustained game-performance
+result. One initial GL_INVALID_ENUM remains unresolved; the temporary diagnostic
+change below has not yet been compiled or tested on the device.
+
+The separate `ios-angle-smoke` app remains the user-confirmed physical-device
+baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
+failure/fix sections below are historical records, superseded by the successful
+OSG device milestone where they describe compilation as pending.
+
+## Temporary first-five-frame GL diagnostics
+
+The first physical OSG test logged:
+
+```text
+Warning: detected OpenGL error 'invalid enumerant' at after RenderBin::draw(..)
+```
+
+This identifies where OSG noticed the error, not the originating GL call. The
+read-only investigation did not establish a root cause. The missing
+WindowingSystemInterface warning is consistent with intentional windowing None
+and externally managed UIKit/EGL; it is not evidence that the external context
+failed. Neither warning is suppressed.
+
+Immediately after constructing `GraphicsWindowEmbedded`, before State setup,
+viewer realization and first traversal, `OSGScene` uses the public State API to
+select `osg::State::ONCE_PER_ATTRIBUTE`. After the fifth completed
+`viewer->frame()` traversal it restores `osg::State::ONCE_PER_FRAME`. Both
+transitions append to the existing `osg-smoke.log`:
+
+```text
+OSG GL checking: ONCE_PER_ATTRIBUTE for initialization and the first 5 OSG-rendered frames
+OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames
+```
+
+Frames 1-5 receive fine-grained checks; frame 6 onward retains normal per-frame
+checks. Clear-only swaps do not consume this window. Suspension/foreground return
+does not reset the existing OSG scene or count, so it neither spends nor restarts
+the five-frame budget. If fewer than five OSG frames run, fine-grained checking
+remains selected for that scene until its fifth traversal or destruction. A
+throwing traversal is not counted; existing error handling still stops the app.
+
+There are no new `glGetError` calls, KHR debug callbacks, source overlays or
+rendering changes. The first frames can incur additional CPU diagnostic overhead;
+their timing is not a baseline performance measurement. This mode can narrow an
+error to an OSG state/attribute boundary but may not identify an individual call.
+
+Existing logs and JSON fields are preserved. `osg_warnings` counts only delivered
+notifications with severity `<= osg::WARN`; a literal "Warning:" prefix does not
+guarantee that severity. Other GL diagnostic notifications may be logged without
+incrementing this counter. `gl_errors` counts only application-side checks: OSG
+can consume and report an error before the application's later check sees it.
+Neither counter is a complete count of all GL errors. Continue inspecting the
+raw OSG messages and their numeric severity, not just the counters.
+
+The full pinned `osg/State` header is not cached locally. Local packaged-binary
+evidence confirms both checking modes exist; the requested public setter's exact
+interface and the new diagnostic output still require native compilation and a
+physical-device run. Review that run for both transition lines and more specific
+GL-error locations before deciding on a compatibility fix or further diagnostics.
 
 ## Architecture and scene
 
@@ -314,9 +370,9 @@ The workflow produces `IOSOSGSmoke-unsigned.ipa` with
 The copied/adapted stdlib packager reopens the ZIP and verifies contents, CRC,
 permissions, resources, SDK dependencies and Mach-O closure before publication.
 Download the IPA on Windows and sign/install it locally through Sideloadly. Use
-the distinct bundle ID `org.openmw.experiments.ios-osg-smoke`; signing/installing
-and framework re-signing still need validation for this new app. No credentials,
-profiles or certificates belong here.
+the distinct bundle ID `org.openmw.experiments.ios-osg-smoke`; installation and
+launch are now user-confirmed for the initial app. Each changed diagnostic build
+still needs its own validation. No credentials, profiles or certificates belong here.
 
 ## Diagnostics, controls and acceptance
 
@@ -339,21 +395,23 @@ Retrieve Documents `osg-smoke.json` and `osg-smoke.log` through Files/file shari
 keep exports only under ignored `device-results/`. OSG logs append across launches,
 JSON is the latest snapshot. Use device console for failures before app logging.
 
-First real run must prove a visible rotating depth-tested colored object, not just
-an OSG link/version string. Export the ANGLE Metal/A18/GLES3 identity, OSG version,
-program link result, increasing traversal/swap counts and errors. Test DS4 mode
-switching/reconnect, both landscape orientations and repeated Home Screen return.
+The first real run proved a visible rotating depth-tested object and the
+ANGLE Metal/A18/GLES3 identity, OSG version, program linking and increasing counts.
+The next run should capture the new error-check transitions and any narrower GL
+diagnostics. Continue testing DS4 reconnect, both landscape orientations and
+repeated Home Screen return beyond the demonstrated controller/foreground cases.
 Check that the external context remains current and that one EGL swap occurs per
 rendered callback. Measure sustained thermal/memory/frame behavior afterward;
 OSG/GLSL compatibility, performance and battery impact cannot be inferred from
 the earlier bare triangle or these host tests.
 
-Remaining native uncertainties: old fork/modern SDK C++ compatibility, transitive
-static link closure and optional detection behavior, GLES3 extension dispatch,
-VAO state, matrix upload, actual shader generation/link behavior, first-frame draw,
-resize/background teardown and the complete IPA. Only four exact source anchors
-were needed in the audit; any further change should be justified by a concrete
-compiler/runtime failure and kept in the new overlay. Do not port the full game,
+Basic native compilation, static linking, shader linking, VAO geometry, matrix
+upload, depth drawing and IPA installation are now established for this scene.
+Remaining uncertainties include the initial invalid enum, the new diagnostic API
+call/output, broader extension paths, repeated lifecycle/resize behavior and
+sustained thermal performance. Only four exact source anchors were needed in the
+audit; any further source adaptation requires concrete compiler/runtime evidence
+and bounded integrity verification. Do not port the full game,
 add plugins, GL4ES, file loading or multithreaded rendering to hide a failing gate.
 
 OSG's pinned `LICENSE.txt` is OSGPL (heading version 1.0, granting version 0.0 or
@@ -372,10 +430,19 @@ python3 -m unittest discover -s experiments/ios-osg-smoke/tools -p 'test_*.py' -
 Tests cover bounded overlays, no-download preparation, source pins, opt-in policy,
 scene/context ownership contracts, required OSG provenance and the inherited
 unsigned IPA/SDK/Mach-O regressions. These synthetic checks do not compile OSG or
-validate native rendering. Completing the native macOS-hosted iPhone build is
-the next required gate.
+validate native rendering. Compiling and physically testing the new temporary
+diagnostics is the next gate; prior device success does not validate this change.
 
-Buffer-label follow-up: the OSG suite ran 60 tests (59 passed, one optional C++
+Temporary-diagnostic follow-up: 63 OSG tests ran (62 passed, one optional C++
+compiler fixture skipped), including three new initialization/scope/restoration
+and reporting regressions. Unchanged ANGLE/Vulkan/Zink suites passed 76/76/43
+tests respectively, with one existing ANGLE compiler-fixture skip: **257 passes,
+two skips** overall. All 32 tool Python files passed AST parsing; OSG JSON/plist,
+unchanged-lock, exact three-file change scope and whitespace checks passed.
+No native compiler/CMake was available locally. No downloads, native build, CI,
+commit or push was performed; the diagnostic mode still needs iPhone validation.
+
+Previous buffer-label follow-up: the OSG suite ran 60 tests (59 passed, one optional C++
 compiler fixture skipped). Regressions now cover all three source-specific aliases,
 native-probe values, rejection of fetched-source edits and invalid/missing buffer
 definitions. A dedicated CLI regression checks the explicit missing-buffer error.
