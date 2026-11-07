@@ -22,7 +22,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn(LOCK["revision"], (repository / "extern/CMakeLists.txt").read_text(encoding="utf-8"))
         self.assertEqual((ROOT / "data/angle-lock.json").read_bytes(),
                          (ROOT.parent / "ios-angle-smoke/data/angle-lock.json").read_bytes())
-        self.assertEqual(len(LOCK["source_sha256"]), 2)
+        self.assertEqual(len(LOCK["source_sha256"]), 4)
 
     def test_cmake_overlay_is_limited_to_sdk_provider_and_window_ownership(self):
         original = '\n'.join([
@@ -37,7 +37,7 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaises(ValueError): overlay("CMakeLists.txt", changed)
 
     def test_extension_overlay_selects_egl_without_global_symbol_fallback(self):
-        text = overlay("src/osg/GLExtensions.cpp", '#if defined(__ANDROID__)\nlegacy_android();\n#endif')
+        text = overlay("src/osg/GLExtensions.cpp", '#if defined(__ANDROID__)\nlegacy_android();\n#endif\n' + prepare_osg.LOD_CAPABILITY)
         self.assertIn('#include <EGL/egl.h>', text)
         self.assertIn('defined(OSG_IOS_ANGLE)', text)
         self.assertIn('eglGetProcAddress(funcName)', text)
@@ -82,7 +82,7 @@ class IntegrationTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValidationError): validate_bundle(files)
         files = bundle()
         build = json.loads(files['osg-build.json'].data)
-        for override in ({'profile': 'GL2'}, {'windowing': 'IOS'}, {'static': False}, {'revision': 'other'}):
+        for override in ({'profile': 'GL2'}, {'windowing': 'IOS'}, {'static': False}, {'revision': 'other'}, {'overlay_version': 1}):
             files['osg-build.json'] = Entry(json.dumps(dict(build, **override)).encode(), REGULAR)
             with self.subTest(override=override), self.assertRaises(ValidationError): validate_bundle(files)
 

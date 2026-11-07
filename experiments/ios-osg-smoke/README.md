@@ -9,8 +9,11 @@ failure. Controller operation and foreground recovery were demonstrated.
 Successful swaps are not measured display FPS or a sustained game-performance
 result. Build #7 subsequently confirmed the five-frame State diagnostics on the
 device, with 1,450 OSG frames/swaps, nominal thermal state and no app/link failure.
-One initial GL_INVALID_ENUM remains unresolved; the new KHR callback instrumentation
-below has not yet been compiled or tested on the device.
+Build #8 then confirmed native compilation, callback registration, useful API-error
+messages and five-frame deregistration on the device. Two independent launches
+reported unsupported `GL_TEXTURE_LOD_BIAS` in `glTexParameterf`. This observed
+operation is identified. Original pinned source is now verified locally and the
+GLES3-only LOD-bias overlay below is implemented, awaiting native Build #9 validation.
 
 The separate `ios-angle-smoke` app remains the user-confirmed physical-device
 baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
@@ -72,12 +75,14 @@ image-backed default Texture2D on unit 0. The error does not justify removing it
 Capture/cleanup lives in `src/GLDebugCapture.hpp` and the existing Renderer in
 `src/main.mm`; focused regressions are in `tools/test_gl_debug.py`.
 
-The leading hypothesis is the desktop aggregate
+Before build #8, the leading hypothesis was the desktop aggregate
 `glTexParameteriv(..., GL_TEXTURE_SWIZZLE_RGBA, ...)` found in this exact packaged
 OSG binary's `Texture::applyTexParameters`. GLES3 uses the individual R/G/B/A
 swizzle parameters. Execution of the aggregate call is **not confirmed**. A guarded
 border-color call is another candidate because the device advertises no border-clamp
-extension. No swizzle/texture correction is implemented by this diagnostic.
+extension. Build #8 instead captured `glTexParameterf` with `GL_TEXTURE_LOD_BIAS`;
+the aggregate swizzle hypothesis does not explain that observed error. No
+swizzle/texture correction is implemented by this diagnostic.
 
 `Renderer::start()` uses the already enumerated runtime extension list to require
 the exact `GL_KHR_debug` token. With the owning ANGLE context current, it resolves
@@ -88,7 +93,8 @@ working experiment continues. No core-function fallback, debug-context request o
 EGL attribute change is made. The existing native C++11 declaration probe now
 checks `GLDEBUGPROCKHR`, `PFNGLDEBUGMESSAGECALLBACKKHRPROC`, `GL_APIENTRY`, and the
 KHR output/synchronous/message-limit constants against the actual restored headers.
-The exact headers are not cached locally, so that native confirmation is pending.
+The exact headers are not cached locally; build #8 passed this native declaration
+probe against the restored artifact, and device callback operation is confirmed.
 
 The callback is registered with synchronous debug output enabled for initialization
 and the first five completed OSG frames. The callback only copies into a fixed
@@ -130,7 +136,85 @@ not prove absence of GL errors. If messages are insufficient, obtain the exact
 pinned texture source before planning narrower call instrumentation or an
 integrity-verified compatibility overlay. The next device run should inspect
 registration/skip reasons, phase-tagged error messages, capture-loss notices and
-the five-frame deregistration line. Display FPS remains unmeasured.
+the five-frame deregistration line. Build #8 confirmed useful error delivery and
+correct deregistration. Display FPS remains unmeasured.
+
+## Build #8: confirmed texture LOD-bias incompatibility
+
+The user reported the same KHR callback error in two independent iPhone launches:
+
+```text
+glTexParameterf: Enum 0x8501 is currently not supported.
+```
+
+`0x8501` is `GL_TEXTURE_LOD_BIAS`. The record identifies OpenGL API source, Error
+type, High severity, ID 1280 (`GL_INVALID_ENUM`) and the first OSG-rendered frame.
+OSG's independent State check identifies Texture2D application. Rendering continues
+and both five-frame diagnostic mechanisms remain enabled and unchanged.
+
+GLES3 does not accept `GL_TEXTURE_LOD_BIAS` as a texture parameter. The earlier
+exact packaged-binary audit placed texture-parameter operations in
+`osg::Texture::applyTexParameters(unsigned, osg::State&) const`; combined with
+the callback, that identifies the texture operation now verified in source below.
+The callback message alone does not reveal the bias value passed. The source
+establishes the default as zero. `GL_TEXTURE_MIN_LOD` and `GL_TEXTURE_MAX_LOD`
+clamp the LOD range and are **not substitutes** for bias.
+
+### Verified original source and narrow correction
+
+The user supplied original files from the pinned
+`9b384d5439977784e5cd250ff8ff7966928ddd27` commit under
+`%USERPROFILE%/Downloads/OpenMW-OSG-pinned-source/src/osg/`. They were read only.
+GLExtensions.cpp independently matches the existing source lock; the other two
+whole-file hashes are now recorded for fail-closed verification of the fetched
+Git originals. No revision or ANGLE/depot_tools pin changes.
+
+| Original file | Confirmed source | Original SHA-256 |
+| --- | --- | --- |
+| `GLExtensions.cpp:917-923` | Non-Emscripten uses `glVersion >= 1.2f` for bias support, which wrongly passes for GLES3. The Emscripten branch uses `>= 3.0f`. | `bd2cb7bc27918acc902848fcde5e1ecc03f6530acfe614e38d3d4740f304a7cc` |
+| `Texture.cpp:1338,2256-2257` | Default `_lodbias(0.0f)`; the capability guards the device-observed `glTexParameterf(target, GL_TEXTURE_LOD_BIAS, _lodbias)`. | `294ea04733def9aa072d0f3563dc965dbb3aac9f6dd4afc3853db5a17d86a2f3` |
+| `Sampler.cpp:45,223` | Default `_lodbias(0.0f)`; dirty sampler setup unconditionally submits `glSamplerParameterf(..., GL_TEXTURE_LOD_BIAS, _lodbias)` once sampler entry points exist. | `a3ac93cd091ff2f91a90ffa39c15defc02dbf4d2a59616e7e0f7460efe7721a9` |
+
+`prepare_osg.py` now overrides bias capability to false only when
+`OSG_GLES3_AVAILABLE` is defined. Existing texture-max-level detection and every
+original desktop version/extension expression remain unchanged. It also surrounds
+only the two texture/sampler bias operations with that profile guard: GLES3 emits
+no unsupported bias call, while the desktop branches retain their exact original
+operations and guards. The separate sampler path is compiled into `osg` (confirmed
+by the existing build log), so it needs its own guard; it has not been exercised
+by the colored-cube device test.
+
+**Zero bias:** no warning or unsupported call, preserving the intended zero-bias
+sampling behavior. **Nonzero bias:** an explicit `OSG_WARN` includes the requested
+value and states `unsupported on GLES3; bias is not applied`. The requested member
+value is not rewritten, but no equivalent GPU bias is implemented. Applications
+requiring nonzero bias must treat it as unsupported. Future shader-level handling
+may be necessary, with sampling-operation/stage-specific semantics; it is outside
+this patch. MIN_LOD/MAX_LOD clamping is unchanged and is not used as a replacement.
+
+All surrounding parameters, swizzle operations, texture initialization, shaders,
+geometry, EGL ownership and controller/lifecycle code are unchanged. No GL errors
+are cleared or hidden; both five-frame diagnostic mechanisms remain intact for
+post-fix verification. One separate source limitation is recorded without a fix:
+Sampler.cpp:183 omits GLES3 from its CLAMP-to-CLAMP_TO_EDGE conversion guard despite
+default CLAMP wraps. That is another potential sampler-path issue if exercised;
+this bias correction does not establish general sampler compatibility.
+
+Overlay version **2** now identifies exactly four changed fetched files: the
+existing CMakeLists.txt/GLExtensions.cpp adaptations plus Texture.cpp/Sampler.cpp.
+Seven exact-once replacement anchors and all four original SHA-256s are checked
+before any write. Missing/duplicate anchors or wrong source fail preparation.
+`check_osg_source.py` still verifies HEAD, original Git blobs, exact transformed
+bytes, tracked-file inventory and output manifest hashes. Bundled build metadata
+and the strict IPA validator require overlay version 2; stale version 1 metadata
+is rejected. Source revision pins remain unchanged.
+
+Build #9 must validate the fetched original hashes, native compilation and strict
+IPA packaging. On the iPhone, retain both diagnostics and verify that the first
+five frames no longer report the 0x8501 error while the cube, depth, controls and
+foreground recovery still work. Report any different error rather than suppressing
+it. Nonzero warning behavior and the unexercised sampler path need their own
+native validation before any broader compatibility claim.
 
 ## Architecture and scene
 
@@ -180,8 +264,9 @@ Verified source at that revision:
 | `src/osg/State.cpp`, `include/osg/Program` | Default aliases can be compact; select the explicit noncompact mapping. Enable supplied matrix uniforms and inspect the actual per-context program link status. |
 | `src/osgViewer/CMakeLists.txt` | Viewer links osgGA, osgText, osgDB, osgUtil, osg, OpenThreads. osgText remains a transitive dependency even with no text drawn. |
 
-Only **two fetched OSG files** are changed: three exact CMake replacements and
-one extension-resolver branch/include. `prepare_osg.py` verifies original SHA-256s
+Exactly **four fetched OSG files** are adapted: three CMake replacements,
+GLExtensions resolver/capability changes, and the Texture/Sampler bias guards.
+`prepare_osg.py` verifies original SHA-256s
 before any write, and `check_osg_source.py` recomputes expected overlays from
 pinned Git blobs, verifies HEAD and rejects unrelated tracked differences.
 `data/osg-lock.json` records all pins, source hashes and overlay version. These
@@ -205,10 +290,12 @@ does not establish runtime KHR_debug support. The existing header-only native
 C++11 probe tests this alias and asserts the KHR identifier equals `0x82E1`.
 A missing/wrong declaration still fails configuration without GL linking.
 
-No new source overlay, hash or overlay-version bump is needed: the original two
+At the shader-label stage, no new source overlay, hash or overlay-version bump
+was needed: the original two
 audited files and their transformations are unchanged. `check_osg_source.py`
 still rejects any tracked modification to `Shader.cpp`. Existing lock/build
-metadata continues to describe overlay version 1; no dependency pin changes.
+metadata described overlay version 1. The later LOD adaptation above uses version
+2; dependency revisions remain unchanged.
 This source-specific compile definition is recorded here and in CMake rather
 than claiming it is a third transformed source file.
 
@@ -296,8 +383,9 @@ checkout or exported source evidence before adding more aliases. No speculative
 mapping is added for other GL object types.
 
 Source-integrity tests explicitly reject modifications to Shader.cpp, Program.cpp
-and BufferObject.cpp. The two original overlay files, SHA-256 checks, dependency
-revisions and overlay version 1 remain unchanged. The UIKit/EGL owner, Metal
+and BufferObject.cpp. At the buffer-label stage the two original overlay files,
+SHA-256 checks and overlay version 1 were unchanged. The later LOD overlay is
+version 2. Dependency revisions and the UIKit/EGL owner, Metal
 presentation and single-threaded OSG traversal are untouched.
 
 Seven OSG libraries are built statically: OpenThreads, osg, osgUtil, osgDB, osgGA,
@@ -473,10 +561,10 @@ the earlier bare triangle or these host tests.
 
 Basic native compilation, static linking, shader linking, VAO geometry, matrix
 upload, depth drawing and IPA installation are now established for this scene.
-Remaining uncertainties include the initial invalid enum, the new diagnostic API
-call/output, broader extension paths, repeated lifecycle/resize behavior and
-sustained thermal performance. Only four exact source anchors were needed in the
-audit; any further source adaptation requires concrete compiler/runtime evidence
+Remaining uncertainties include native validation of the LOD-bias correction,
+broader extension paths, repeated lifecycle/resize behavior and sustained thermal
+performance. The initial four exact source anchors plus three verified LOD anchors
+are the bounded adaptations; any further source adaptation requires compiler/runtime evidence
 and bounded integrity verification. Do not port the full game,
 add plugins, GL4ES, file loading or multithreaded rendering to hide a failing gate.
 
@@ -499,7 +587,28 @@ unsigned IPA/SDK/Mach-O regressions. These synthetic checks do not compile OSG o
 validate native rendering. Compiling and physically testing the new temporary
 diagnostics is the next gate; prior device success does not validate this change.
 
-KHR callback follow-up: 70 OSG tests ran (68 passed, two C++ compiler-dependent
+Pinned-source LOD correction: 78 OSG tests ran (75 passed, three compiler-dependent
+fixtures skipped). The eight new LOD tests include real reference checksum/default/
+roundtrip checks, GLES3/desktop behavior, exact-anchor rejection, atomic wrong-source
+failure and overlay-version/pin checks. The optional C++11 fixture executes the
+actual anchor snippets across desktop/GLES3 and Emscripten variants; it could not
+run on this host. Other suites passed: ANGLE 76/one skip, Vulkan 76, Zink 43:
+**270 passes, four skips** overall. All 34 Python tool files passed AST parsing;
+JSON/plist, whitespace, unchanged revision pins/original hashes, application-source
+preservation, read-only references and experiment-only scope checks passed.
+The application and both diagnostics are unchanged. Native OSG/Apple compilation
+and Build #9 device behavior are untested; no downloads, CI, commits or pushes ran.
+
+Previous Build #8 LOD-bias investigation: only the README changed. Existing suites passed:
+OSG 68 passed/two skips, ANGLE 76 passed/one skip, Vulkan 76 passed, Zink 43 passed
+(**263 passes, three compiler-dependent skips**). All 33 Python tool files passed
+AST parsing; JSON/plist, unchanged pins, README-only scope and whitespace checks
+passed. The source-evidence recipe passed Bash syntax checking without execution.
+No bias-exclusion behavior test was added or claimed: no verified overlay can be
+implemented until the original pinned source is available. Native callback/error
+reporting remains intact. No downloads, builds, CI, commits or pushes occurred.
+
+Previous KHR callback follow-up: 70 OSG tests ran (68 passed, two C++ compiler-dependent
 fixtures skipped). Seven focused callback tests cover runtime/entry-point checks,
 registration order, bounded full-message recording, phases, scope, cleanup,
 unchanged rendering/error polls and the pinned-header native probe. The optional

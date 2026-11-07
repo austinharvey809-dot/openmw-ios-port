@@ -397,7 +397,7 @@ def validate_bundle(files: dict[str, Entry], sdk: Path | None = None):
     require(isinstance(osg_build, dict) and osg_build.get("revision") == "9b384d5439977784e5cd250ff8ff7966928ddd27"
             and osg_build.get("profile") == "GLES3" and osg_build.get("windowing") == "None"
             and osg_build.get("static") is True and osg_build.get("deployment") == "18.0"
-            and osg_build.get("overlay_version") == 1, "Wrong OSG build provenance")
+            and osg_build.get("overlay_version") == 2, "Wrong OSG build provenance")
     required_resources = ["Info.plist", executable, requirements_name, "osg-lock.json", "osg-build.json", "Licenses/osg-LICENSE.txt"]
     manifest = info.get("UIApplicationSceneManifest", {})
     require(isinstance(manifest, dict), "Invalid scene manifest")

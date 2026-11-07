@@ -10,6 +10,36 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = json.loads((ROOT / "data/osg-lock.json").read_text(encoding="utf-8"))
 
+# Verbatim anchors from the original, checksum-locked 9b384d5 sources. Keep
+# desktop behavior intact; GLES3 has no texture/sampler LOD-bias parameter.
+LOD_CAPABILITY = '''#if defined(__EMSCRIPTEN__)
+    isTextureMaxLevelSupported = (glVersion >= 3.0f);    // WebGL 2.0 (OpenGL ES 3.0)
+    isTextureLODBiasSupported  = (glVersion >= 3.0f) || isGLExtensionSupported(contextID, "GL_EXT_texture_lod_bias");
+#else
+    isTextureMaxLevelSupported = (glVersion >= 1.2f);
+    isTextureLODBiasSupported  = (glVersion >= 1.2f) || isGLExtensionSupported(contextID, "GL_EXT_texture_lod_bias");
+#endif'''
+LOD_CAPABILITY_GLES3 = LOD_CAPABILITY + '''
+
+#if defined(OSG_GLES3_AVAILABLE)
+    isTextureLODBiasSupported = false; // GLES3 does not accept GL_TEXTURE_LOD_BIAS.
+#endif'''
+TEXTURE_LOD_BIAS = '''    if (extensions->isTextureLODBiasSupported)
+        glTexParameterf(target, GL_TEXTURE_LOD_BIAS, _lodbias);'''
+TEXTURE_LOD_BIAS_GLES3 = '''    #if defined(OSG_GLES3_AVAILABLE)
+    if (_lodbias != 0.0f)
+        OSG_WARN << "Texture::applyTexParameters: nonzero LOD bias (" << _lodbias << ") is unsupported on GLES3; bias is not applied." << std::endl;
+    #else
+''' + TEXTURE_LOD_BIAS + '''
+    #endif'''
+SAMPLER_LOD_BIAS = '        extensions->glSamplerParameterf(samplerobject, GL_TEXTURE_LOD_BIAS, _lodbias);'
+SAMPLER_LOD_BIAS_GLES3 = '''        #if defined(OSG_GLES3_AVAILABLE)
+        if (_lodbias != 0.0f)
+            OSG_WARN << "Sampler::compileGLObjects: nonzero LOD bias (" << _lodbias << ") is unsupported on GLES3; bias is not applied." << std::endl;
+        #else
+''' + SAMPLER_LOD_BIAS + '''
+        #endif'''
+
 
 def replace_once(text, old, new):
     if text.count(old) != 1:
@@ -34,6 +64,11 @@ def overlay(name, text):
             '#if defined(OSG_IOS_ANGLE)\n'
             '        return reinterpret_cast<void*>(eglGetProcAddress(funcName));\n'
             '    #elif defined(__ANDROID__)')
+        text = replace_once(text, LOD_CAPABILITY, LOD_CAPABILITY_GLES3)
+    elif name == "src/osg/Texture.cpp":
+        text = replace_once(text, TEXTURE_LOD_BIAS, TEXTURE_LOD_BIAS_GLES3)
+    elif name == "src/osg/Sampler.cpp":
+        text = replace_once(text, SAMPLER_LOD_BIAS, SAMPLER_LOD_BIAS_GLES3)
     else:
         raise ValueError("Unaudited overlay file")
     return text

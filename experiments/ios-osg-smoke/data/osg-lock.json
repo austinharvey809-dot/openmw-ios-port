@@ -5,10 +5,12 @@
   "minimum_ios": "18.0",
   "profile": "GLES3",
   "components": ["OpenThreads", "osg", "osgUtil", "osgDB", "osgGA", "osgText", "osgViewer"],
-  "overlay_version": 1,
+  "overlay_version": 2,
   "source_sha256": {
     "CMakeLists.txt": "c7f6a0c415da61d0a2f4097f5d55f2ff806743c11b84e25bacffc46d9b545a01",
-    "src/osg/GLExtensions.cpp": "bd2cb7bc27918acc902848fcde5e1ecc03f6530acfe614e38d3d4740f304a7cc"
+    "src/osg/GLExtensions.cpp": "bd2cb7bc27918acc902848fcde5e1ecc03f6530acfe614e38d3d4740f304a7cc",
+    "src/osg/Texture.cpp": "294ea04733def9aa072d0f3563dc965dbb3aac9f6dd4afc3853db5a17d86a2f3",
+    "src/osg/Sampler.cpp": "a3ac93cd091ff2f91a90ffa39c15defc02dbf4d2a59616e7e0f7460efe7721a9"
   },
   "license": "OSGPL 0.0 or later, incorporating LGPL; preserve LICENSE.txt and OpenThreads notices. Review linked-source/file-specific notices before distribution."
 }

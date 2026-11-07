@@ -65,7 +65,7 @@ def bundle(*, dependencies=(), rpaths=()):
             "angle-build.json": Entry(json.dumps({"angle_revision": "6ea96bcca6d7f05199f5565c6d5c4722af7269da", "target": "arm64-apple-ios18.0", "metal_only": True, "validation": "device-binary-and-sdk-passed"}).encode(), REGULAR),
             "Licenses/LICENSE": Entry(b"original upstream notice fixture", REGULAR),
             "osg-lock.json": Entry((Path(__file__).resolve().parents[1] / "data/osg-lock.json").read_bytes(), REGULAR),
-            "osg-build.json": Entry(json.dumps({"revision":"9b384d5439977784e5cd250ff8ff7966928ddd27","profile":"GLES3","windowing":"None","static":True,"deployment":"18.0","overlay_version":1}).encode(), REGULAR),
+            "osg-build.json": Entry(json.dumps({"revision":"9b384d5439977784e5cd250ff8ff7966928ddd27","profile":"GLES3","windowing":"None","static":True,"deployment":"18.0","overlay_version":2}).encode(), REGULAR),
             "Licenses/osg-LICENSE.txt": Entry(b"OSGPL fixture",REGULAR),
             "Licenses/OpenThreads/Thread": Entry(b"MIT fixture",REGULAR)}
 

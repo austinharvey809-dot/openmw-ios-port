@@ -135,7 +135,7 @@ set_target_properties(IOSOSGSmoke PROPERTIES
     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.openmw.experiments.ios-osg-smoke"
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1" XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/osg-build.json"
-    "{\"revision\":\"9b384d5439977784e5cd250ff8ff7966928ddd27\",\"profile\":\"GLES3\",\"overlay_version\":1,\"windowing\":\"None\",\"static\":true,\"deployment\":\"18.0\"}\n")
+    "{\"revision\":\"9b384d5439977784e5cd250ff8ff7966928ddd27\",\"profile\":\"GLES3\",\"overlay_version\":2,\"windowing\":\"None\",\"static\":true,\"deployment\":\"18.0\"}\n")
 add_custom_command(TARGET IOSOSGSmoke POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ANGLE_ROOT}/Frameworks" "$<TARGET_BUNDLE_DIR:IOSOSGSmoke>/Frameworks"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${ANGLE_ROOT}/Licenses" "$<TARGET_BUNDLE_DIR:IOSOSGSmoke>/Licenses"

@@ -39,8 +39,9 @@ class ShaderLabelTests(unittest.TestCase):
         self.assertIn('static_assert(GL_BUFFER_KHR == 0x82E0 && GL_BUFFER == GL_BUFFER_KHR,', probe)
         self.assertIn('unset(OSG_ANGLE_GLES3_HEADER_TYPES_OK CACHE)', probe)
 
-    def test_no_new_source_overlay_or_relaxed_source_inventory(self):
-        self.assertEqual(set(LOCK['source_sha256']), {'CMakeLists.txt', 'src/osg/GLExtensions.cpp'})
+    def test_no_shader_label_source_overlay_or_relaxed_source_inventory(self):
+        self.assertEqual(set(LOCK['source_sha256']), {'CMakeLists.txt', 'src/osg/GLExtensions.cpp',
+                                                    'src/osg/Texture.cpp', 'src/osg/Sampler.cpp'})
         for source in ('Shader.cpp', 'Program.cpp', 'BufferObject.cpp'):
             with self.subTest(source=source), self.assertRaisesRegex(ValueError, 'Unaudited overlay file'):
                 overlay('src/osg/' + source, 'original')

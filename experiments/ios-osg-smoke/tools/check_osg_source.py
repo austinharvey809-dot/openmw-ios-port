@@ -17,7 +17,7 @@ def check(source):
         raise ValueError("OSG source overlay provenance mismatch")
     if set(overlay.get("files", {})) != set(LOCK["source_sha256"]):
         raise ValueError("OSG overlay inventory mismatch")
-    # All tracked differences must be exactly the two audited overlay files.
+    # All tracked differences must be exactly the checksum-locked overlay inventory.
     changed = subprocess.run(["git", "diff", "--name-only", "HEAD"], cwd=source, check=True,
                              capture_output=True, text=True).stdout.splitlines()
     if set(changed) != set(LOCK["source_sha256"]):
