@@ -7,8 +7,10 @@ reported 1,632 OSG frames, 1,846 successful EGL swaps and approximately 30.87 sw
 per active second, with nominal thermal state and no application or shader-link
 failure. Controller operation and foreground recovery were demonstrated.
 Successful swaps are not measured display FPS or a sustained game-performance
-result. One initial GL_INVALID_ENUM remains unresolved; the temporary diagnostic
-change below has not yet been compiled or tested on the device.
+result. Build #7 subsequently confirmed the five-frame State diagnostics on the
+device, with 1,450 OSG frames/swaps, nominal thermal state and no app/link failure.
+One initial GL_INVALID_ENUM remains unresolved; the new KHR callback instrumentation
+below has not yet been compiled or tested on the device.
 
 The separate `ios-angle-smoke` app remains the user-confirmed physical-device
 baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
@@ -47,8 +49,8 @@ the five-frame budget. If fewer than five OSG frames run, fine-grained checking
 remains selected for that scene until its fifth traversal or destruction. A
 throwing traversal is not counted; existing error handling still stops the app.
 
-There are no new `glGetError` calls, KHR debug callbacks, source overlays or
-rendering changes. The first frames can incur additional CPU diagnostic overhead;
+The State diagnostic added no `glGetError` calls, source overlays or rendering
+changes. The first frames can incur additional CPU diagnostic overhead;
 their timing is not a baseline performance measurement. This mode can narrow an
 error to an OSG state/attribute boundary but may not identify an individual call.
 
@@ -60,11 +62,75 @@ can consume and report an error before the application's later check sees it.
 Neither counter is a complete count of all GL errors. Continue inspecting the
 raw OSG messages and their numeric severity, not just the counters.
 
-The full pinned `osg/State` header is not cached locally. Local packaged-binary
-evidence confirms both checking modes exist; the requested public setter's exact
-interface and the new diagnostic output still require native compilation and a
-physical-device run. Review that run for both transition lines and more specific
-GL-error locations before deciding on a compatibility fix or further diagnostics.
+Build #7 confirmed both State-check transitions and localized the warning to
+`after applying attribute Texture2D`. The app creates no texture explicitly:
+exact compiled-binary evidence shows `StateSet::setGlobalDefaults()` creates an
+image-backed default Texture2D on unit 0. The error does not justify removing it.
+
+## Temporary GL_KHR_debug capture
+
+Capture/cleanup lives in `src/GLDebugCapture.hpp` and the existing Renderer in
+`src/main.mm`; focused regressions are in `tools/test_gl_debug.py`.
+
+The leading hypothesis is the desktop aggregate
+`glTexParameteriv(..., GL_TEXTURE_SWIZZLE_RGBA, ...)` found in this exact packaged
+OSG binary's `Texture::applyTexParameters`. GLES3 uses the individual R/G/B/A
+swizzle parameters. Execution of the aggregate call is **not confirmed**. A guarded
+border-color call is another candidate because the device advertises no border-clamp
+extension. No swizzle/texture correction is implemented by this diagnostic.
+
+`Renderer::start()` uses the already enumerated runtime extension list to require
+the exact `GL_KHR_debug` token. With the owning ANGLE context current, it resolves
+`glDebugMessageCallbackKHR` through `eglGetProcAddress`, checks the driver message
+size and allocates bounded storage **before constructing OSG**. A missing extension,
+entry point, valid size or allocation produces an explicit skip reason; the
+working experiment continues. No core-function fallback, debug-context request or
+EGL attribute change is made. The existing native C++11 declaration probe now
+checks `GLDEBUGPROCKHR`, `PFNGLDEBUGMESSAGECALLBACKKHRPROC`, `GL_APIENTRY`, and the
+KHR output/synchronous/message-limit constants against the actual restored headers.
+The exact headers are not cached locally, so that native confirmation is pending.
+
+The callback is registered with synchronous debug output enabled for initialization
+and the first five completed OSG frames. The callback only copies into a fixed
+buffer: no GL/EGL calls, file I/O, Foundation formatting or dynamic allocation.
+Published messages are drained through the existing application logger after GL
+returns. Records are JSON-prefixed `KHR_debug` lines with numeric `source`, `type`,
+`id`, `severity`, exact `message` text, `phase` and `osg_frame`. JSON escapes preserve
+multiline/embedded-NUL text. Valid UTF-8 is retained; a Latin-1 fallback preserves
+otherwise undecodable driver bytes as characters. `message_encoding` and
+`message_bytes` record the decoding and original length.
+
+Phases distinguish `before OSG construction`, `OSG initialization`, `OSG rendered
+frame` (1-based) and clear-only callbacks (completed OSG frame count). The record
+limit is 64 messages for the whole window, not per frame or resume; each message
+must fit the driver's reported maximum, capped at 16 KiB. Missing/oversized messages
+and overflow are counted and explicitly reported as capture loss, without changing
+OSG checking. Accepted records are not silently truncated. Excessive advertised
+message lengths skip capture altogether. These limits bound both memory and log
+volume; loss is reported initially and totals are updated on detach, rather than
+logging every subsequent dropped message. Message delivery is not guaranteed
+under overflow.
+
+After the fifth OSG frame returns (and OSG restores ONCE_PER_FRAME), the callback
+is deregistered and the prior debug-output/synchronous enable states are restored.
+Remaining records are flushed. Clear-only swaps do not advance this budget. Pause
+detaches before context unbinding; foreground reattaches only if fewer than five
+OSG frames completed, preserving captured records and the remaining budget.
+Initialization/traversal failures detach while current. Shutdown attempts to bind
+the owning context before cleanup. If rebinding fails, no callback-cleanup GL
+call is issued against another context, and userdata stays alive through EGL
+context/display destruction. No callback calls are made by the capture destructor.
+
+Existing driver message filters are retained; no `glDebugMessageControl` filtering
+or suppression is introduced. `GL_KHR_debug` and pointer availability do not guarantee
+that a non-debug context emits a useful message or names the offending API/pname.
+The context attributes intentionally remain unchanged. Keep the existing State
+checks and raw logs as independent evidence; absence of callback messages does
+not prove absence of GL errors. If messages are insufficient, obtain the exact
+pinned texture source before planning narrower call instrumentation or an
+integrity-verified compatibility overlay. The next device run should inspect
+registration/skip reasons, phase-tagged error messages, capture-loss notices and
+the five-frame deregistration line. Display FPS remains unmeasured.
 
 ## Architecture and scene
 
@@ -433,7 +499,19 @@ unsigned IPA/SDK/Mach-O regressions. These synthetic checks do not compile OSG o
 validate native rendering. Compiling and physically testing the new temporary
 diagnostics is the next gate; prior device success does not validate this change.
 
-Temporary-diagnostic follow-up: 63 OSG tests ran (62 passed, one optional C++
+KHR callback follow-up: 70 OSG tests ran (68 passed, two C++ compiler-dependent
+fixtures skipped). Seven focused callback tests cover runtime/entry-point checks,
+registration order, bounded full-message recording, phases, scope, cleanup,
+unchanged rendering/error polls and the pinned-header native probe. The optional
+C++17 fixture exercises the actual helper with synthetic EGL/GLES declarations;
+it is not proof of ANGLE ABI or device behavior. Unchanged ANGLE/Vulkan/Zink suites
+passed 76/76/43 tests with one ANGLE compiler-fixture skip: **263 passes, three
+skips** overall. All 33 Python tool files passed AST parsing; JSON/plist, whitespace,
+unchanged pins/OSGScene and six-file experiment-only scope checks passed. No local
+CMake/native compiler was available. Native probe/Apple compilation and callback
+delivery remain untested; no downloads, CI, commits or pushes were performed.
+
+Previous State-diagnostic follow-up: 63 OSG tests ran (62 passed, one optional C++
 compiler fixture skipped), including three new initialization/scope/restoration
 and reporting regressions. Unchanged ANGLE/Vulkan/Zink suites passed 76/76/43
 tests respectively, with one existing ANGLE compiler-fixture skip: **257 passes,

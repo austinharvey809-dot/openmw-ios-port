@@ -108,8 +108,8 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(scene.count('++frames;'), 1)
         self.assertEqual(scene.count('frames = 0;'), 1)
         main = (ROOT / 'src/main.mm').read_text(encoding='utf-8')
-        self.assertIn('if (clearOnly || !sceneAvailable) glClear(', main)
-        self.assertIn('else osgScene->frame(seconds, width, height);', main)
+        self.assertRegex(main, r'if \(clearOnly \|\| !sceneAvailable\) \{\s*glClear\(')
+        self.assertIn('try { osgScene->frame(seconds, width, height); }', main)
 
     def test_diagnostics_keep_notification_and_gl_error_reporting_distinct(self):
         scene = (ROOT / 'src/OSGScene.hpp').read_text(encoding='utf-8')

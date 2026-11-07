@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include "OSGScene.hpp"
+#include "GLDebugCapture.hpp"
 
 static NSString *Text(const char *value) { return value ? [NSString stringWithUTF8String:value] : @"<null>"; }
 static bool HasExtension(const char *list, const char *name) {
@@ -48,11 +49,37 @@ public:
     EGLSurface surface = EGL_NO_SURFACE;
     EGLContext context = EGL_NO_CONTEXT;
     std::unique_ptr<OSGScene> osgScene;
+    GLDebugCapture debugCapture; // callback storage outlives explicit EGL teardown
     bool current = false, sceneAvailable = false;
     NSString *shaderError = @"";
     NSMutableDictionary *identity = [NSMutableDictionary dictionary];
     int width = 0, height = 0;
     unsigned errors = 0;
+
+    void debugStatus(const std::string& message) {
+        if (!message.empty()) Log(Text(message.c_str()));
+    }
+    void flushDebug(bool final = false) {
+        debugCapture.drain([](const GLDebugCapture::Record& record, const char* bytes) {
+            // Callback only copied bytes. All allocation, encoding and file I/O
+            // happens here on the existing rendering thread, after GL returns.
+            NSString *message = [[NSString alloc] initWithBytes:bytes length:record.length encoding:NSUTF8StringEncoding];
+            const bool utf8 = message != nil;
+            if (!message) message = [[NSString alloc] initWithBytes:bytes length:record.length encoding:NSISOLatin1StringEncoding];
+            NSDictionary *entry = @{@"source": @(record.source), @"type": @(record.type),
+                @"id": @(record.id), @"severity": @(record.severity), @"message": message ?: @"",
+                @"message_encoding": utf8 ? @"utf-8" : @"iso-8859-1", @"message_bytes": @(record.length),
+                @"phase": Text(GLDebugCapture::phaseName(record.phase)), @"osg_frame": @(record.frame)};
+            NSData *json = [NSJSONSerialization dataWithJSONObject:entry options:NSJSONWritingSortedKeys error:nil];
+            NSString *text = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+            Log([@"KHR_debug " stringByAppendingString:text ?: @"message serialization failed"]);
+        }, [this](const std::string& message) { debugStatus(message); }, final);
+    }
+    void stopDebug(const char* reason) {
+        const std::string status = debugCapture.detach(reason);
+        flushDebug(true);
+        debugStatus(status);
+    }
 
     void checkGL(const char *where) {
         GLenum error = glGetError();
@@ -117,20 +144,34 @@ public:
         Log([NSString stringWithFormat:@"Identity: %@", identity]);
         checkGL("identity queries");
         try {
+            debugCapture.setPhase(GLDebugCapture::Phase::BeforeOSG);
+            debugStatus(debugCapture.configure([glExtensions containsObject:@"GL_KHR_debug"], display, context));
+            flushDebug();
+            debugCapture.setPhase(GLDebugCapture::Phase::Initialization);
             osgScene = std::make_unique<OSGScene>([](const std::string& message) { Log(Text(message.c_str())); });
             identity[@"osg_version"] = Text(osgGetVersion());
             identity[@"osg_context_id"] = @(osgScene->contextID());
             sceneAvailable = true;
         }
-        catch (const std::exception &error) { shaderError = Text(error.what()); Log(shaderError); }
+        catch (const std::exception &error) {
+            stopDebug("OSG initialization failure");
+            shaderError = Text(error.what()); Log(shaderError);
+        }
+        catch (...) { stopDebug("OSG initialization failure"); throw; }
+        flushDebug();
     }
     void resume() {
         if (display != EGL_NO_DISPLAY && context != EGL_NO_CONTEXT && surface != EGL_NO_SURFACE) {
             CheckEGL(eglMakeCurrent(display, surface, surface, context), "eglMakeCurrent resume"); current = true;
+            if (sceneAvailable && osgScene && osgScene->frames < 5) {
+                debugCapture.setPhase(GLDebugCapture::Phase::Frame, osgScene->frames + 1);
+                debugStatus(debugCapture.attach());
+            }
         }
     }
     void pause() {
         if (current) {
+            stopDebug("suspension (remaining diagnostic frames resume on foreground)");
             // One lifecycle drain before iOS suspends us, never in the draw loop.
             glFinish();
             // Unbind even if the drain reports a lost context. Stop visibly on
@@ -152,10 +193,19 @@ public:
         CheckEGL(eglQuerySurface(display, surface, EGL_WIDTH, &width), "eglQuerySurface width");
         CheckEGL(eglQuerySurface(display, surface, EGL_HEIGHT, &height), "eglQuerySurface height");
         if (width <= 0 || height <= 0) return false;
+        if (debugCapture.active())
+            debugCapture.setPhase(clearOnly || !sceneAvailable ? GLDebugCapture::Phase::ClearOnly : GLDebugCapture::Phase::Frame,
+                                  osgScene ? osgScene->frames + (clearOnly || !sceneAvailable ? 0 : 1) : 0);
         glViewport(0, 0, width, height);
         glClearColor(0.15f + 0.1f * std::sin(seconds), 0.12f, 0.2f + 0.1f * std::cos(seconds), 1.0f);
-        if (clearOnly || !sceneAvailable) glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        else osgScene->frame(seconds, width, height);
+        if (clearOnly || !sceneAvailable) {
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        } else {
+            try { osgScene->frame(seconds, width, height); }
+            catch (...) { stopDebug("OSG traversal failure"); throw; }
+            if (osgScene->frames >= 5 && debugCapture.active()) stopDebug("five completed OSG-rendered frames");
+        }
+        if (debugCapture.active()) flushDebug();
         if (eglGetCurrentContext() != context || eglGetCurrentDisplay() != display)
             throw std::runtime_error("OSG changed/released the application-owned EGL context");
         checkGL("frame commands");
@@ -164,6 +214,12 @@ public:
     }
     ~Renderer() {
         if (display == EGL_NO_DISPLAY) return;
+        // Cleanup GL calls must use our own context, including after suspension.
+        // On rebind failure userdata stays alive through the EGL destruction below.
+        if (context != EGL_NO_CONTEXT && surface != EGL_NO_SURFACE &&
+            (eglGetCurrentContext() != context || eglGetCurrentDisplay() != display))
+            current = eglMakeCurrent(display, surface, surface, context) == EGL_TRUE;
+        try { stopDebug("renderer shutdown"); } catch (...) { /* context teardown still owns userdata */ }
         osgScene.reset();
         eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (surface != EGL_NO_SURFACE) eglDestroySurface(display, surface);

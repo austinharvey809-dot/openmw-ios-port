@@ -56,11 +56,18 @@ static_assert(sizeof(GLint64) == 8 && sizeof(GLuint64) == 8, \"GLES3 64-bit type
 static_assert(GL_SHADER_KHR == 0x82E1 && GL_SHADER == GL_SHADER_KHR, \"KHR shader label identifier\");
 static_assert(GL_PROGRAM_KHR == 0x82E2 && GL_PROGRAM == GL_PROGRAM_KHR, \"KHR program label identifier\");
 static_assert(GL_BUFFER_KHR == 0x82E0 && GL_BUFFER == GL_BUFFER_KHR, \"KHR buffer label identifier\");
+static_assert(GL_DEBUG_OUTPUT_KHR == 0x92E0 && GL_DEBUG_OUTPUT_SYNCHRONOUS_KHR == 0x8242,
+              \"KHR debug output enables\");
+static_assert(GL_MAX_DEBUG_MESSAGE_LENGTH_KHR == 0x9143, \"KHR debug message limit\");
+void GL_APIENTRY debugCallbackProbe(GLenum, GLenum, GLuint, GLenum, GLsizei, const GLchar*, const void*) {}
 int main() {
+    GLDEBUGPROCKHR callback = &debugCallbackProbe;
+    PFNGLDEBUGMESSAGECALLBACKKHRPROC registerCallback = nullptr;
     PFNGLGENVERTEXARRAYSPROC core = nullptr;
     PFNGLGENVERTEXARRAYSOESPROC extension = nullptr;
     GLint64EXT signedExtension = 0;
     GLuint64EXT unsignedExtension = 0;
+    (void)callback; (void)registerCallback;
     return core || extension || signedExtension || unsignedExtension;
 }" OSG_ANGLE_GLES3_HEADER_TYPES_OK)
     if(NOT OSG_ANGLE_GLES3_HEADER_TYPES_OK)
