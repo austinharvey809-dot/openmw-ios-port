@@ -3,6 +3,7 @@
 #include <osg/Depth>
 #include <osg/Geode>
 #include <osg/Geometry>
+#include <osg/Group>
 #include <osg/GLExtensions>
 #include <osg/MatrixTransform>
 #include <osg/Notify>
@@ -43,10 +44,12 @@ class OSGScene {
     osg::ref_ptr<osg::Program> program;
     osg::ref_ptr<osg::Program> texturedProgram;
     osg::ref_ptr<osg::StateSet> coloredState, texturedState;
-    osg::ref_ptr<osg::StateSet> profileStates[3];
+    osg::ref_ptr<osg::StateSet> profileStates[4];
     osg::ref_ptr<osg::Geode> baseGeode, repeatGeode;
-    unsigned textureProfile = 0;
-    bool profileRendered[3] = {false, false, false};
+    osg::ref_ptr<osg::Group> minificationGroup;
+    osg::ref_ptr<osg::MatrixTransform> comparisonModels[6];
+    unsigned textureProfile = 3;
+    bool profileRendered[4] = {false, false, false, false};
     osg::ref_ptr<SceneLog> log;
     osg::ref_ptr<osg::NotifyHandler> previousLog;
     bool checkedProgram = false;
@@ -54,6 +57,9 @@ class OSGScene {
     bool textured = true;
     int width = 0, height = 0;
 public:
+    bool mipmapCapabilityChecked = false;
+    bool mipmapCapabilitySupported = false;
+    bool mipmapEntryPointAvailable = false;
     unsigned long long frames = 0;
     double traversalWallMs = 0;
     unsigned contextID() const { return window->getState()->getContextID(); }
@@ -202,25 +208,49 @@ void main() { result=texture(checkerTexture, uv); }
             profileStates[profile]->setAttributeAndModes(new osg::Depth, osg::StateAttribute::ON);
             profileStates[profile]->setMode(GL_DEPTH_TEST, osg::StateAttribute::ON);
         }
-        model->setStateSet(texturedState.get());
-        log->write("OSG cube startup: textured; RGBA8 32x32, red v=0/u=0 corner, NEAREST, CLAMP_TO_EDGE, level zero, LOD bias zero");
+        // Build #12: one additional texture; original three profiles stay untouched.
+        osg::ref_ptr<osg::Texture2D> mipTexture = new osg::Texture2D(image.get());
+        mipTexture->setUnRefImageDataAfterApply(false);
+        mipTexture->setFilter(osg::Texture::MIN_FILTER, osg::Texture::LINEAR_MIPMAP_LINEAR);
+        mipTexture->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);
+        mipTexture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
+        mipTexture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
+        mipTexture->setLODBias(0.0f);
+        mipTexture->setUseHardwareMipMapGeneration(true);
+        profileStates[3] = new osg::StateSet;
+        profileStates[3]->setAttributeAndModes(texturedProgram.get(), osg::StateAttribute::ON);
+        profileStates[3]->setTextureAttribute(0, mipTexture.get(), osg::StateAttribute::ON);
+        profileStates[3]->addUniform(new osg::Uniform("checkerTexture", 0));
+        profileStates[3]->setAttributeAndModes(new osg::Depth, osg::StateAttribute::ON);
+        profileStates[3]->setMode(GL_DEPTH_TEST, osg::StateAttribute::ON);
+        minificationGroup = new osg::Group;
+        for (unsigned i = 0; i < 6; ++i) {
+            comparisonModels[i] = new osg::MatrixTransform;
+            comparisonModels[i]->setStateSet(profileStates[i % 2 == 0 ? 3 : 1].get());
+            comparisonModels[i]->addChild(baseGeode.get());
+            minificationGroup->addChild(comparisonModels[i].get());
+        }
+        applySelection();
+        log->write("OSG cube startup: mipmapped profile; hardware generation REQUESTED, actual glGenerateMipmap execution UNKNOWN; expected levels 32,16,8,4,2,1");
         viewer->setSceneData(model.get());
         viewer->realize();
         log->write("Embedded OSG viewer realized; single thread, external EGL swap");
     }
     unsigned warnings() const { return log->warnings; }
     static const char* textureProfileName(unsigned profile) {
-        const char* names[] = {"NEAREST/CLAMP_TO_EDGE (1x1)", "LINEAR/CLAMP_TO_EDGE (1x1)", "NEAREST/REPEAT (2x2)"};
-        return profile < 3 ? names[profile] : "invalid";
+        const char* names[] = {"NEAREST/CLAMP_TO_EDGE (1x1)", "LINEAR/CLAMP_TO_EDGE (1x1)", "NEAREST/REPEAT (2x2)",
+                               "LINEAR_MIPMAP_LINEAR/CLAMP_TO_EDGE (paired minification)"};
+        return profile < 4 ? names[profile] : "invalid";
     }
     const char* selectedTextureProfile() const { return textureProfileName(textureProfile); }
-    bool textureProfileRendered(unsigned profile) const { return profile < 3 && profileRendered[profile]; }
+    bool textureProfileRendered(unsigned profile) const { return profile < 4 && profileRendered[profile]; }
     void applySelection() {
         model->setStateSet(textured ? profileStates[textureProfile].get() : coloredState.get());
-        model->setChild(0, textured && textureProfile == 2 ? repeatGeode.get() : baseGeode.get());
+        osg::Node* selected = textured && textureProfile == 2 ? repeatGeode.get() : baseGeode.get();
+        model->setChild(0, textured && textureProfile == 3 ? minificationGroup.get() : selected);
     }
     void cycleTextureProfile() {
-        textureProfile = (textureProfile + 1) % 3;
+        textureProfile = (textureProfile + 1) % 4;
         applySelection();
         log->write(std::string("OSG selected texture profile: ") + selectedTextureProfile() +
                    (textured ? " (textured cube selected)" : " (stored while colored cube selected)"));
@@ -241,6 +271,31 @@ void main() { result=texture(checkerTexture, uv); }
             viewer->getCamera()->setProjectionMatrixAsPerspective(50.0, double(w)/h, 0.1, 100.0);
         }
         model->setMatrix(osg::Matrix::rotate(time*0.55, osg::Vec3(0,0,1)));
+        if (textured && textureProfile == 3) {
+            if (!mipmapCapabilityChecked) {
+                auto* extensions = window->getState()->get<osg::GLExtensions>();
+                mipmapEntryPointAvailable = extensions && extensions->glGenerateMipmap;
+                mipmapCapabilitySupported = extensions && (extensions->isGenerateMipMapSupported || extensions->isFrameBufferObjectSupported);
+                mipmapCapabilityChecked = true;
+                log->write(std::string("OSG mipmap gate: capability=") + (mipmapCapabilitySupported ? "true" : "false") +
+                           "; glGenerateMipmap pointer=" + (mipmapEntryPointAvailable ? "available" : "missing") +
+                           "; request=true; actual execution UNKNOWN (not intercepted)");
+                if (!mipmapCapabilitySupported || !mipmapEntryPointAvailable)
+                    throw std::runtime_error("Mipmap profile blocked: hardware generation capability/entry point unavailable; CPU fallback is not accepted");
+            }
+            model->setMatrix(osg::Matrix::identity());
+            // Screen-right and screen-up are perpendicular to the fixed view vector.
+            // Each row's pair has equal depth, scale, rotation and base UVs.
+            const osg::Vec3 screenRight(0.8574929f, 0.5144958f, 0.0f);
+            const osg::Vec3 screenUp(-0.2353796f, 0.3922993f, 0.8892118f);
+            const float scales[3] = {0.2f, 0.05f, 0.0125f};
+            for (unsigned i = 0; i < 6; ++i) {
+                const unsigned row = i / 2;
+                const osg::Vec3 position = screenRight * (i % 2 == 0 ? -0.65f : 0.65f) + screenUp * (1.0f - row);
+                comparisonModels[i]->setMatrix(osg::Matrix::scale(scales[row], scales[row], scales[row]) *
+                    osg::Matrix::rotate(time*0.55, osg::Vec3(0,0,1)) * osg::Matrix::translate(position));
+            }
+        }
         viewer->getCamera()->setClearColor(osg::Vec4(.12f,.14f,.2f,1));
         // Later profiles are outside KHR_debug's original five-frame lifetime.
         // Spend at most one extra fine-grained traversal per first-used profile.
@@ -264,9 +319,11 @@ void main() { result=texture(checkerTexture, uv); }
             window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_FRAME);
             log->write("OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames");
         }
-        if (textured && !profileRendered[textureProfile]) {
-            profileRendered[textureProfile] = true;
-            log->write(std::string("OSG texture profile first traversal completed: ") + selectedTextureProfile() +
+        for (unsigned profile = 0; profile < 4; ++profile) {
+            const bool visible = textured && (profile == textureProfile || (textureProfile == 3 && profile == 1));
+            if (!visible || profileRendered[profile]) continue;
+            profileRendered[profile] = true;
+            log->write(std::string("OSG texture profile first traversal completed: ") + textureProfileName(profile) +
                        "; OSG frame " + std::to_string(frames) + "; inspect raw GL diagnostics, not a pass certificate");
         }
         bool& checked = textured ? checkedTexturedProgram : checkedProgram;

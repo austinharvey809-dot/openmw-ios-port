@@ -3,6 +3,9 @@
 Source checks do not prove native OSG/GLES behavior; the C++ fixture needs a compiler.
 """
 from pathlib import Path
+import hashlib
+import math
+import os
 import re
 import shutil
 import subprocess
@@ -38,6 +41,13 @@ class TextureSceneTests(unittest.TestCase):
 #include <cassert>
 #include <array>
 int main() {
+    assert(Checkerboard::mipLevelCount(32)==6);
+    const unsigned expected[] = {32,16,8,4,2,1};
+    for (unsigned level=0; level<6; ++level)
+        assert(Checkerboard::mipDimension(32,level)==expected[level]);
+    assert(Checkerboard::mipDimension(32,99)==1);
+    assert(Checkerboard::mipLevelCount(0)==0 && Checkerboard::mipDimension(0,0)==0);
+    assert(Checkerboard::mipLevelCount(1)==1 && Checkerboard::mipLevelCount(31)==5);
     static_assert(Checkerboard::Width == 32 && Checkerboard::Height == 32 &&
                   Checkerboard::Channels == 4, "fixture size");
     std::array<unsigned char, 4098> storage;
@@ -121,7 +131,7 @@ void main() { result=color; }
     def test_resources_created_once_not_in_frame_or_mode_switch(self):
         after_constructor = SCENE.split('unsigned warnings() const', 1)[1]
         for allocation in ('new osg::Image', 'new osg::Texture2D', 'allocateImage(', 'Checkerboard::fill(', 'new osg::Program'):
-            self.assertEqual(SCENE.count(allocation), 2 if allocation in ('new osg::Program', 'new osg::Texture2D') else 1)
+            self.assertEqual(SCENE.count(allocation), {'new osg::Program': 2, 'new osg::Texture2D': 3}.get(allocation, 1))
             self.assertNotIn(allocation, after_constructor)
 
     def test_link_validation_is_independent_and_after_traversal(self):
@@ -136,7 +146,7 @@ void main() { result=color; }
 
     def test_startup_and_controller_modes_preserve_clear_selection(self):
         self.assertIn('bool textured = true;', SCENE)
-        self.assertLess(SCENE.index('model->setStateSet(texturedState.get());'), SCENE.index('viewer->realize();'))
+        self.assertLess(SCENE.index('applySelection();'), SCENE.index('viewer->realize();'))
         self.assertIn('model->setStateSet(textured ? profileStates[textureProfile].get() : coloredState.get());', SCENE)
         self.assertIn('applySelection();', SCENE.split('void setTextured(bool value)', 1)[1].split('void frame(', 1)[0])
         controls = MAIN.split('if (controller != previousController || !buttonsPrimed)', 1)[1].split('if (renderer && !renderer->sceneAvailable)', 1)[0]
@@ -159,7 +169,7 @@ void main() { result=color; }
 
     def test_profiles_have_separate_fixed_textures_sharing_one_image(self):
         self.assertIn('profileStates[0] = texturedState;', SCENE)
-        variants = SCENE.split('for (unsigned profile = 1; profile < 3; ++profile)', 1)[1].split('model->setStateSet(texturedState.get());', 1)[0]
+        variants = SCENE.split('for (unsigned profile = 1; profile < 3; ++profile)', 1)[1].split('// Build #12:', 1)[0]
         for text in ('new osg::Texture2D(image.get())', 'variant->setUnRefImageDataAfterApply(false);',
                      'profile == 1 ? osg::Texture::LINEAR : osg::Texture::NEAREST',
                      'profile == 2 ? osg::Texture::REPEAT : osg::Texture::CLAMP_TO_EDGE',
@@ -182,7 +192,7 @@ void main() { result=color; }
         self.assertIn('repeatGeometry->setVertexAttribArray(6, repeatUVs.get(), osg::Array::BIND_PER_VERTEX);', SCENE)
         self.assertIn('repeatGeometry->setVertexArray(vertices.get());', SCENE)
         self.assertIn('repeatGeometry->addPrimitiveSet(indices.get());', SCENE)
-        self.assertIn('model->setChild(0, textured && textureProfile == 2 ? repeatGeode.get() : baseGeode.get());', SCENE)
+        self.assertIn('osg::Node* selected = textured && textureProfile == 2 ? repeatGeode.get() : baseGeode.get();', SCENE)
         self.assertEqual(SCENE.count('uvs->push_back('), 1)
         self.assertEqual(SCENE.count('repeatUVs->push_back('), 1)
 
@@ -193,11 +203,11 @@ void main() { result=color; }
         self.assertIn('previousRight = right;', controls.split('} else {', 1)[0])
         self.assertIn('if (right && !previousRight && renderer && renderer->osgScene)\n            renderer->osgScene->cycleTextureProfile();', controls)
         cycle = SCENE.split('void cycleTextureProfile()', 1)[1].split('bool isTextured()', 1)[0]
-        self.assertIn('textureProfile = (textureProfile + 1) % 3;', cycle)
+        self.assertIn('textureProfile = (textureProfile + 1) % 4;', cycle)
         self.assertIn('applySelection();', cycle)
         self.assertNotIn('textured =', cycle)
         self.assertNotIn('clearOnly', cycle)
-        self.assertIn('unsigned textureProfile = 0;', SCENE)
+        self.assertIn('unsigned textureProfile = 3;', SCENE)
 
     def test_profile_names_and_first_use_evidence_are_exported_without_pass_claim(self):
         for name in ('NEAREST/CLAMP_TO_EDGE (1x1)', 'LINEAR/CLAMP_TO_EDGE (1x1)', 'NEAREST/REPEAT (2x2)'):
@@ -211,21 +221,111 @@ void main() { result=color; }
     def test_late_first_use_checks_are_bounded_per_profile_and_restore_after_draw(self):
         frame = SCENE.split('void frame(double time, int w, int h)', 1)[1]
         self.assertIn('const bool lateProfileCheck = frames >= 5 && textured && !profileRendered[textureProfile];', frame)
-        self.assertIn('bool profileRendered[3] = {false, false, false};', SCENE)
+        self.assertIn('bool profileRendered[4] = {false, false, false, false};', SCENE)
         enable = frame.index('setCheckForGLErrors(osg::State::ONCE_PER_ATTRIBUTE)')
         draw = frame.index('viewer->frame(time);')
         restore = frame.index('setCheckForGLErrors(osg::State::ONCE_PER_FRAME)')
-        mark = frame.index('profileRendered[textureProfile] = true;')
+        mark = frame.index('profileRendered[profile] = true;')
         self.assertLess(enable, draw)
         self.assertLess(draw, restore)
         self.assertLess(restore, mark)
         self.assertEqual(frame.count('if (lateProfileCheck)'), 2)
-        self.assertIn('if (textured && !profileRendered[textureProfile])', frame)
+        self.assertIn('const bool visible = textured && (profile == textureProfile || (textureProfile == 3 && profile == 1));', frame)
+        self.assertIn('if (!visible || profileRendered[profile]) continue;', frame)
         self.assertIn('KHR_debug initial window is not rearmed', frame)
         # No extra error poll and no KHR re-registration: the original lifecycle
         # and five-frame callback ownership remain covered by test_gl_debug.py.
         self.assertNotIn('glGetError', frame)
         self.assertNotIn('profileRendered[textureProfile] = false', SCENE)
+
+    def test_mipmapped_profile_is_exactly_one_additional_fixed_texture(self):
+        block = SCENE.split('// Build #12:', 1)[1].split('applySelection();', 1)[0]
+        self.assertEqual(block.count('new osg::Texture2D(image.get())'), 1)
+        for text in ('mipTexture->setUnRefImageDataAfterApply(false);',
+                     'mipTexture->setFilter(osg::Texture::MIN_FILTER, osg::Texture::LINEAR_MIPMAP_LINEAR);',
+                     'mipTexture->setFilter(osg::Texture::MAG_FILTER, osg::Texture::LINEAR);',
+                     'mipTexture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);',
+                     'mipTexture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);',
+                     'mipTexture->setLODBias(0.0f);', 'mipTexture->setUseHardwareMipMapGeneration(true);',
+                     'profileStates[3]->setTextureAttribute(0, mipTexture.get(), osg::StateAttribute::ON);'):
+            self.assertIn(text, block)
+        self.assertEqual(SCENE.count('osg::Texture::LINEAR_MIPMAP_LINEAR'), 1)
+        self.assertEqual(SCENE.count('setUseHardwareMipMapGeneration(true)'), 1)
+        self.assertIn('profileStates[4]', SCENE)
+        self.assertIn('textured && textureProfile == 3 ? minificationGroup.get() : selected', SCENE)
+
+    def test_hardware_gate_precedes_traversal_and_does_not_claim_observation(self):
+        frame = SCENE.split('void frame(double time, int w, int h)', 1)[1]
+        gate = frame.split('if (!mipmapCapabilityChecked)', 1)[1].split('model->setMatrix(osg::Matrix::identity());', 1)[0]
+        self.assertIn('extensions && extensions->glGenerateMipmap', gate)
+        self.assertIn('extensions->isGenerateMipMapSupported || extensions->isFrameBufferObjectSupported', gate)
+        self.assertIn('if (!mipmapCapabilitySupported || !mipmapEntryPointAvailable)', gate)
+        self.assertIn('throw std::runtime_error("Mipmap profile blocked:', gate)
+        self.assertIn('CPU fallback is not accepted', gate)
+        self.assertLess(frame.index('if (!mipmapCapabilityChecked)'), frame.index('viewer->frame(time);'))
+        self.assertIn('@"generate_call_observed": [NSNull null]', MAIN)
+        self.assertIn('@"capability_checked"', MAIN)
+        self.assertIn('@"entry_point_available"', MAIN)
+        self.assertIn('actual execution UNKNOWN (not intercepted)', SCENE)
+        self.assertNotIn('glGenerateMipmap(', MAIN + SCENE)
+
+    def test_expected_mip_calculation_contract_and_export(self):
+        self.assertIn('for (; extent; extent >>= 1) ++count;', CHECKER)
+        self.assertIn('while (level-- && extent > 1) extent >>= 1;', CHECKER)
+        self.assertIn('if (!extent) return 0;', CHECKER)
+        self.assertIn('Checkerboard::mipLevelCount(Checkerboard::Width)', MAIN)
+        self.assertIn('Checkerboard::mipDimension(Checkerboard::Width, level)', MAIN)
+        self.assertIn('@"expected_dimensions": expectedMipDimensions', MAIN)
+        # Actual helper execution (including zero, one, NPOT and chain sizes)
+        # is part of the optional C++ pixel fixture above, not this source check.
+
+    def test_comparison_pairs_are_preallocated_and_equivalent_except_filter(self):
+        block = SCENE.split('minificationGroup = new osg::Group;', 1)[1].split('applySelection();', 1)[0]
+        self.assertIn('for (unsigned i = 0; i < 6; ++i)', block)
+        self.assertIn('profileStates[i % 2 == 0 ? 3 : 1]', block)
+        self.assertIn('comparisonModels[i]->addChild(baseGeode.get());', block)
+        self.assertIn('const unsigned row = i / 2;', SCENE)
+        self.assertIn('osg::Matrix::scale(scales[row], scales[row], scales[row])', SCENE)
+        self.assertIn('screenRight * (i % 2 == 0 ? -0.65f : 0.65f)', SCENE)
+        self.assertIn('left=mip, right=LINEAR', MAIN)
+        scales = [float(x.rstrip('f')) for x in re.search(r'const float scales\[3\] = \{([^}]+)\}', SCENE)[1].split(',')]
+        self.assertEqual(scales, [.2, .05, .0125])
+        eye = (3, -5, 3)
+        for axis in ('screenRight', 'screenUp'):
+            vector = [float(x.rstrip('f')) for x in re.search(r'const osg::Vec3 ' + axis + r'\(([^)]+)\)', SCENE)[1].split(',')]
+            self.assertAlmostEqual(sum(a*b for a,b in zip(vector,eye)), 0, places=5)
+            self.assertAlmostEqual(sum(a*a for a in vector), 1, places=5)
+        # Conservative projected bounding diameter: smallest cube is well below
+        # 32 pixels even for a 1600-pixel drawable height; actual GPU LOD is unknown.
+        radius = math.sqrt(3)*scales[-1]
+        pixels = 1600*radius/((math.sqrt(43)-radius)*math.tan(math.radians(25)))
+        self.assertLess(pixels, 32)
+
+    def test_mipmap_startup_and_comparator_diagnostic_inventory(self):
+        self.assertIn('unsigned textureProfile = 3;', SCENE)
+        self.assertIn('for (unsigned profile = 0; profile < 4; ++profile)', MAIN)
+        self.assertIn('profile == textureProfile || (textureProfile == 3 && profile == 1)', SCENE)
+        self.assertIn('OSG texture profile first traversal completed: ") + textureProfileName(profile)', SCENE)
+        self.assertIn('return profile < 4 ? names[profile]', SCENE)
+
+    def test_locally_available_pinned_mipmap_sources(self):
+        reference = Path(os.environ.get('OSG_PINNED_SOURCE_REFERENCE',
+                         'C:/Users/austi/Downloads/OpenMW-OSG-pinned-source'))
+        paths = {name: reference / 'src/osg' / name for name in ('Texture2D.cpp','Texture.cpp','GLExtensions.cpp')}
+        if not all(path.is_file() for path in paths.values()):
+            self.skipTest('Original pinned reference files not available; no download attempted')
+        hashes = {'Texture2D.cpp': '4373e4c82137e42076d2416eae046230fcf01eca0daabad72abb5cafbbd01268',
+                  'Texture.cpp': '294ea04733def9aa072d0f3563dc965dbb3aac9f6dd4afc3853db5a17d86a2f3',
+                  'GLExtensions.cpp': 'bd2cb7bc27918acc902848fcde5e1ecc03f6530acfe614e38d3d4740f304a7cc'}
+        for name, path in paths.items():
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), hashes[name])
+        source = paths['Texture2D.cpp'].read_text()
+        self.assertIn('applyTexImage2D_load(state,GL_TEXTURE_2D,image.get(),', source)
+        self.assertIn('applyTexImage2D_subload(state,GL_TEXTURE_2D,image.get(),', source)
+        self.assertIn('getModifiedCount(contextID) != _image->getModifiedCount()', source)
+        texture = paths['Texture.cpp'].read_text()
+        self.assertIn('useGluBuildMipMaps = mipmappingRequired && (!useHardwareMipMapGeneration && !image->isMipmap())', texture)
+        self.assertIn('ext->glGenerateMipmap(textureObject->target());', texture)
 
 
 if __name__ == '__main__':

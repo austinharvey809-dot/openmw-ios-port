@@ -26,13 +26,151 @@ and foreground recovery worked. The run reported 1,007 OSG frames, 1,095 success
 EGL swaps and approximately 30.05 swaps per active second, nominal thermal state
 and no new GL API errors in the five-frame window. Overlay version 2 remains validated.
 
-**Build #11 status: implemented locally; native compilation and device testing
-pending.** It adds controlled filtering/wrapping profiles below.
+**Build #11: physically validated.** All three filtering/wrapping profiles work.
+The user reported 1,307 OSG frames, 1,339 successful EGL swaps, approximately
+30.28 swaps per active second, zero application-polled GL errors and nominal
+thermal state. Application error counts alone are not a complete GL-error audit.
+
+**Build #12 status: implemented locally; native compilation/device validation
+pending.** It adds one mipmapped profile and a matched minification comparison.
 
 The separate `ios-angle-smoke` app remains the user-confirmed physical-device
 baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
 failure/fix sections below are historical records, superseded by the successful
 OSG device milestone where they describe compilation as pending.
+
+## Build #12: mipmapped texture minification
+
+Profile 3 adds exactly one retained Texture2D using the existing shared, OSG-owned
+32x32 RGBA checkerboard Image. Its settings are LINEAR_MIPMAP_LINEAR minification,
+LINEAR magnification, CLAMP_TO_EDGE S/T, LOD bias zero and
+`setUseHardwareMipMapGeneration(true)`. No CPU mip data is supplied by the app.
+The expected full chain is **32, 16, 8, 4, 2, 1** (six square levels including
+level zero). `Checkerboard::mipLevelCount/mipDimension` calculate expectations;
+they are not GPU allocation queries. The original image generator and all four
+application shader sources remain unchanged. No sampler objects or source overlays
+are added.
+
+The original profiles 0/1/2 retain their texture configuration and normal cube
+views. Build #12 starts textured with profile **3**, before viewer realization,
+so its first upload and the LINEAR comparator upload are intended to occur in
+the existing initialization/first-five-frame OSG/KHR_debug window. D-pad Right
+now cycles **3 -> 0 -> 1 -> 2 -> 3**, without changing held-button/reconnection
+handling. Square selects colored versus the remembered textured profile; Triangle
+selects clear-only without changing the selection. Colored mode remains the
+original single rotating cube. Existing first-use diagnostics now have four profile
+labels. The paired view records both profiles 3 and 1 as traversed; traversal
+completion is not a certificate that every draw/upload happened or was error-free.
+
+### Exact pinned source inspection and generation evidence
+
+The reference files in `C:/Users/austi/Downloads/OpenMW-OSG-pinned-source/src/osg/`
+are user-supplied originals from OSG commit
+`9b384d5439977784e5cd250ff8ff7966928ddd27`; none were edited. Texture.cpp and
+GLExtensions.cpp match the existing locked hashes. Newly supplied Texture2D.cpp
+has SHA-256 **4373e4c82137e42076d2416eae046230fcf01eca0daabad72abb5cafbbd01268**.
+Its commit provenance is supplied by the user; recording this checksum does not
+independently authenticate it against a Git object. No dependency lock/overlay
+inventory was changed. An optional local-reference test checks all three complete
+hashes and the audited upload/source anchors; absent references cause an explicit
+skip rather than a download.
+
+| Audited original source | Finding |
+| --- | --- |
+| Texture2D.cpp:160-282 | Existing objects are reused; changed Image modified counts trigger subloads. An image-backed first apply selects load or recycled-object subload helpers. |
+| Texture.cpp:2485-2487,2505-2540 | A mipmapped min filter and an Image without mip levels select hardware generation when enabled; otherwise a CPU/GLU generation path exists. |
+| Texture.cpp:2834-2861 | The corresponding subload path also uses before/after generation helpers. |
+| Texture.cpp:2944-2961 | The request plus `isGenerateMipMapSupported`, or FBO support with a generation pointer, determines eligibility. |
+| Texture.cpp:2964-3010 | With GLES3 and hardware enabled, the before helper returns GENERATE_MIPMAP; the after helper calls `ext->glGenerateMipmap(...)` if a TextureObject exists. |
+| GLExtensions.cpp:845,892,1132 | GLES3 supplies built-in generation capability; OSG resolves core glGenerateMipmap before EXT/OES variants. |
+
+Before the first profile-3 frame traversal the app queries the current State's
+OSG GLExtensions capability and generation pointer, logs them and blocks the test
+if either is unavailable. It does not knowingly continue into the audited CPU
+fallback. This gate establishes eligibility, not execution. There is no new
+manual glGenerateMipmap call, interception, callback replacement or GL readback.
+The image is immutable after construction and resources are retained, so the
+audited normal reuse path does not request regeneration every frame. Resource
+eviction/context recreation or a future image modification could cause another
+upload/generation; this is not a lifetime guarantee of exactly one driver call.
+
+Keep the evidence levels separate:
+
+- **Request:** the texture configuration requests hardware generation.
+- **Capability:** the OSG flag and function pointer describe availability only.
+- **Source path:** the inspected pinned helpers predict the generation call under
+  the stated conditions; runtime branching is not traced by this experiment.
+- **Actual call:** currently **unobserved**. KHR_debug reports driver diagnostics,
+  not a successful-call trace; silence does not prove generation ran.
+- **Visual sampling:** a correct, stable minified image supports texture sampling
+  compatibility but does not prove every expected level exists or is selected,
+  nor which implementation generated it.
+
+JSON adds a `mipmap` record containing the request, capability-check status,
+capability/pointer results, expected dimensions and `generate_call_observed: null`.
+Unchecked capabilities are null. The overlay explicitly labels generation as
+requested and call execution as unmeasured. Direct confirmation would require
+separately reviewed, narrowly bounded call tracing (for example, an integrity-
+verified trace at the audited OSG call), or an appropriate device graphics capture.
+No such instrumentation/overlay is included. Even observing the GL call would
+not by itself expose ANGLE's internal Metal/GPU scheduling or generation cost.
+
+### Controlled visual comparison
+
+Only profile 3 replaces the single-cube view with three pairs of rotating cubes:
+**left = mipmapped; right = existing nonmipmapped LINEAR profile 1**. Top-to-bottom
+scales are 0.2, 0.05 and 0.0125. Each row shares the same base geometry, 0..1 UVs,
+shader, rotation, scale and view depth. Translation is along camera-right/up axes
+perpendicular to the fixed view vector, so a pair has equivalent perspective and
+lighting-free sampling conditions. Six transforms are created once and share the
+base geode/geometry; only matrices change per frame. No texture/image resources
+are reconstructed or dirtied per frame. There is still exactly one external swap.
+
+The smallest cubes project well below 32 pixels at typical iPhone drawable sizes
+(the host mathematical check bounds their diameter below 32 even at height 1600).
+They should therefore exercise minification, with the middle/smallest left cubes
+showing less checkerboard shimmer and tending toward an averaged color. The red
+marker should blend/disappear under strong minification. Right-hand cubes may
+alias or shimmer more. Actual selected mip LODs and display FPS are unmeasured;
+grazing faces, rotation, drawable size and filtering affect appearance. Six cubes
+also change draw workload, so this view is a sampling comparison, not a controlled
+performance comparison against the prior single-cube application.
+
+### Build #12 physical acceptance
+
+1. Fresh launch: confirm selected profile 3, the three left/right pairs, expected
+   sizes/depth/rotation, ANGLE Metal/GLES3 identity and successful textured linking.
+2. Inspect the request/capability/pointer log, first-use labels for profiles 3 and
+   1, OSG/KHR raw messages and five-frame cleanup/restoration. A missing capability
+   is a blocker. No new GL errors, shader failures or callback-loss messages are
+   acceptable; the existing windowing-interface warning remains expected.
+3. Compare the middle/smallest pairs while rotating. Record visible differences
+   without treating a rendered image as direct generation-call evidence. Preserve
+   `generate_call_observed: null` unless a later instrumented build establishes it.
+4. Cycle all four profiles, including the unchanged three baseline views. Check
+   colored and clear-only selection restoration, held D-pad Right, reconnect,
+   both landscape sizes and repeated Home Screen return. Returning to profile 3
+   must not deliberately rebuild textures or restart the KHR window.
+5. Export the new-session log/JSON with all four traversal flags, capability
+   evidence, expected dimensions, error messages/counts, swap/CPU measurements
+   and thermal state. Measure sustained behavior; swaps are not display FPS.
+
+Native compilation, OSG resource reuse, actual generation execution, mip allocation
+and physical sampling remain unverified for Build #12. No native build, downloads,
+CI, commits or pushes were performed. Existing pins, overlay version 2, EGL/Metal
+ownership, single-threaded traversal, packaging and workflows remain unchanged.
+
+Local results: OSG **96 passed/four compiler-dependent skips**, ANGLE 76 passed/one
+skip, Vulkan 76 passed and Zink 43 passed: **291 passed, five skipped** overall.
+Six new mipmap regressions cover configuration, eligibility/unknown-call reporting,
+expected-chain calculation contracts, paired projection/minification, startup/
+diagnostic inventory and real pinned reference hashes/upload anchors. The optional
+C++ pixel fixture now also executes chain calculations for 32, 31, 1 and 0 and
+the six expected dimensions; it was skipped on this host without a compiler.
+The real-reference test passed locally; CI skips it if those reference files are
+absent. All 35 Python tool files passed AST parsing; JSON/plist, whitespace,
+five-file scope and original profiles/shaders/checker pixels/controller/Renderer
+preservation checks passed. No skipped test is treated as native validation.
 
 ## Build #11: bounded filtering and wrapping comparison
 

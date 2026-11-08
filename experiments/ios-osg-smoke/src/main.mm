@@ -296,10 +296,18 @@ public:
         (renderer->osgScene->isTextured() ? @"textured" : @"colored") : @"unavailable";
     result[@"texture_profile"] = renderer && renderer->osgScene ? Text(renderer->osgScene->selectedTextureProfile()) : @"unavailable";
     NSMutableArray *profileResults = [NSMutableArray array];
-    if (renderer && renderer->osgScene) for (unsigned profile = 0; profile < 3; ++profile)
+    if (renderer && renderer->osgScene) for (unsigned profile = 0; profile < 4; ++profile)
         [profileResults addObject:@{@"profile": Text(OSGScene::textureProfileName(profile)),
                                    @"first_traversal_completed": @(renderer->osgScene->textureProfileRendered(profile))}];
     result[@"texture_profiles"] = profileResults;
+    NSMutableArray *expectedMipDimensions = [NSMutableArray array];
+    for (unsigned level = 0; level < Checkerboard::mipLevelCount(Checkerboard::Width); ++level)
+        [expectedMipDimensions addObject:@(Checkerboard::mipDimension(Checkerboard::Width, level))];
+    result[@"mipmap"] = @{@"hardware_generation_requested": @YES,
+        @"capability_checked": @(renderer && renderer->osgScene && renderer->osgScene->mipmapCapabilityChecked),
+        @"capability_supported": renderer && renderer->osgScene && renderer->osgScene->mipmapCapabilityChecked ? @(renderer->osgScene->mipmapCapabilitySupported) : [NSNull null],
+        @"entry_point_available": renderer && renderer->osgScene && renderer->osgScene->mipmapCapabilityChecked ? @(renderer->osgScene->mipmapEntryPointAvailable) : [NSNull null],
+        @"generate_call_observed": [NSNull null], @"expected_dimensions": expectedMipDimensions};
     NSData *build = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"angle-build" ofType:@"json"]];
     if (build) result[@"dependency"] = [NSJSONSerialization JSONObjectWithData:build options:0 error:nil] ?: @{};
     NSData *osgBuild = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"osg-build" ofType:@"json"]];
@@ -322,6 +330,9 @@ public:
     if (renderer && renderer->osgScene)
         self.overlay.text = [self.overlay.text stringByAppendingFormat:@"\nSelected texture: %@ | D-pad Right: cycle\nOSG traversals: %llu | traversal wall: %.2f ms | warnings/errors: %u",
             Text(renderer->osgScene->selectedTextureProfile()), renderer->osgScene->frames, renderer->osgScene->traversalWallMs, renderer->osgScene->warnings()];
+    if (renderer && renderer->osgScene && renderer->osgScene->isTextured() &&
+        std::strcmp(renderer->osgScene->selectedTextureProfile(), OSGScene::textureProfileName(3)) == 0)
+        self.overlay.text = [self.overlay.text stringByAppendingString:@"\nPairs: left=mip, right=LINEAR; top to bottom smaller\nMipmap generation: requested; GL call execution unmeasured"];
 }
 - (void)activate {
     [self view]; [self.view layoutIfNeeded];
