@@ -43,6 +43,10 @@ class OSGScene {
     osg::ref_ptr<osg::Program> program;
     osg::ref_ptr<osg::Program> texturedProgram;
     osg::ref_ptr<osg::StateSet> coloredState, texturedState;
+    osg::ref_ptr<osg::StateSet> profileStates[3];
+    osg::ref_ptr<osg::Geode> baseGeode, repeatGeode;
+    unsigned textureProfile = 0;
+    bool profileRendered[3] = {false, false, false};
     osg::ref_ptr<SceneLog> log;
     osg::ref_ptr<osg::NotifyHandler> previousLog;
     bool checkedProgram = false;
@@ -104,6 +108,20 @@ public:
         geometry->setUseVertexArrayObject(true);
         osg::ref_ptr<osg::Geode> geode = new osg::Geode;
         geode->addDrawable(geometry.get());
+        baseGeode = geode;
+        // A separate VAO/geometry supplies 2x2 tiling; baseline UVs stay untouched.
+        osg::ref_ptr<osg::Vec2Array> repeatUVs = new osg::Vec2Array;
+        for (const auto& uv : *uvs) repeatUVs->push_back(osg::Vec2(uv.x()*2.0f, uv.y()*2.0f));
+        osg::ref_ptr<osg::Geometry> repeatGeometry = new osg::Geometry;
+        repeatGeometry->setVertexArray(vertices.get());
+        repeatGeometry->setColorArray(colors.get(), osg::Array::BIND_PER_VERTEX);
+        repeatGeometry->setVertexAttribArray(6, repeatUVs.get(), osg::Array::BIND_PER_VERTEX);
+        repeatGeometry->addPrimitiveSet(indices.get());
+        repeatGeometry->setUseDisplayList(false);
+        repeatGeometry->setUseVertexBufferObjects(true);
+        repeatGeometry->setUseVertexArrayObject(true);
+        repeatGeode = new osg::Geode;
+        repeatGeode->addDrawable(repeatGeometry.get());
         model = new osg::MatrixTransform;
         model->addChild(geode.get());
         program = new osg::Program;
@@ -165,6 +183,25 @@ void main() { result=texture(checkerTexture, uv); }
             state->setAttributeAndModes(new osg::Depth, osg::StateAttribute::ON);
             state->setMode(GL_DEPTH_TEST, osg::StateAttribute::ON);
         }
+        profileStates[0] = texturedState; // Build #10's original state, unchanged.
+        for (unsigned profile = 1; profile < 3; ++profile) {
+            osg::ref_ptr<osg::Texture2D> variant = new osg::Texture2D(image.get());
+            variant->setUnRefImageDataAfterApply(false);
+            const auto filter = profile == 1 ? osg::Texture::LINEAR : osg::Texture::NEAREST;
+            const auto wrap = profile == 2 ? osg::Texture::REPEAT : osg::Texture::CLAMP_TO_EDGE;
+            variant->setFilter(osg::Texture::MIN_FILTER, filter);
+            variant->setFilter(osg::Texture::MAG_FILTER, filter);
+            variant->setWrap(osg::Texture::WRAP_S, wrap);
+            variant->setWrap(osg::Texture::WRAP_T, wrap);
+            variant->setLODBias(0.0f);
+            variant->setUseHardwareMipMapGeneration(false);
+            profileStates[profile] = new osg::StateSet;
+            profileStates[profile]->setAttributeAndModes(texturedProgram.get(), osg::StateAttribute::ON);
+            profileStates[profile]->setTextureAttribute(0, variant.get(), osg::StateAttribute::ON);
+            profileStates[profile]->addUniform(new osg::Uniform("checkerTexture", 0));
+            profileStates[profile]->setAttributeAndModes(new osg::Depth, osg::StateAttribute::ON);
+            profileStates[profile]->setMode(GL_DEPTH_TEST, osg::StateAttribute::ON);
+        }
         model->setStateSet(texturedState.get());
         log->write("OSG cube startup: textured; RGBA8 32x32, red v=0/u=0 corner, NEAREST, CLAMP_TO_EDGE, level zero, LOD bias zero");
         viewer->setSceneData(model.get());
@@ -172,11 +209,27 @@ void main() { result=texture(checkerTexture, uv); }
         log->write("Embedded OSG viewer realized; single thread, external EGL swap");
     }
     unsigned warnings() const { return log->warnings; }
+    static const char* textureProfileName(unsigned profile) {
+        const char* names[] = {"NEAREST/CLAMP_TO_EDGE (1x1)", "LINEAR/CLAMP_TO_EDGE (1x1)", "NEAREST/REPEAT (2x2)"};
+        return profile < 3 ? names[profile] : "invalid";
+    }
+    const char* selectedTextureProfile() const { return textureProfileName(textureProfile); }
+    bool textureProfileRendered(unsigned profile) const { return profile < 3 && profileRendered[profile]; }
+    void applySelection() {
+        model->setStateSet(textured ? profileStates[textureProfile].get() : coloredState.get());
+        model->setChild(0, textured && textureProfile == 2 ? repeatGeode.get() : baseGeode.get());
+    }
+    void cycleTextureProfile() {
+        textureProfile = (textureProfile + 1) % 3;
+        applySelection();
+        log->write(std::string("OSG selected texture profile: ") + selectedTextureProfile() +
+                   (textured ? " (textured cube selected)" : " (stored while colored cube selected)"));
+    }
     bool isTextured() const { return textured; }
     void setTextured(bool value) {
         if (textured == value) return;
         textured = value;
-        model->setStateSet(textured ? texturedState.get() : coloredState.get());
+        applySelection();
         log->write(std::string("OSG cube mode: ") + (textured ? "textured" : "colored"));
     }
     void frame(double time, int w, int h) {
@@ -189,15 +242,32 @@ void main() { result=texture(checkerTexture, uv); }
         }
         model->setMatrix(osg::Matrix::rotate(time*0.55, osg::Vec3(0,0,1)));
         viewer->getCamera()->setClearColor(osg::Vec4(.12f,.14f,.2f,1));
+        // Later profiles are outside KHR_debug's original five-frame lifetime.
+        // Spend at most one extra fine-grained traversal per first-used profile.
+        const bool lateProfileCheck = frames >= 5 && textured && !profileRendered[textureProfile];
+        if (lateProfileCheck) {
+            window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_ATTRIBUTE);
+            log->write(std::string("OSG first-use ONCE_PER_ATTRIBUTE: ") + selectedTextureProfile() +
+                       "; KHR_debug initial window is not rearmed; OSG frame " + std::to_string(frames + 1));
+        }
         const auto begin = std::chrono::steady_clock::now();
         viewer->frame(time); // advance + event + update + cull/draw traversal
         traversalWallMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-begin).count();
+        if (lateProfileCheck) {
+            window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_FRAME);
+            log->write(std::string("OSG ONCE_PER_FRAME restored after first-use traversal: ") + selectedTextureProfile());
+        }
         ++frames;
         // Count completed OSG traversals only; clear-only swaps and suspension
         // do not spend or restart this temporary diagnostic window.
         if (frames == 5) {
             window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_FRAME);
             log->write("OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames");
+        }
+        if (textured && !profileRendered[textureProfile]) {
+            profileRendered[textureProfile] = true;
+            log->write(std::string("OSG texture profile first traversal completed: ") + selectedTextureProfile() +
+                       "; OSG frame " + std::to_string(frames) + "; inspect raw GL diagnostics, not a pass certificate");
         }
         bool& checked = textured ? checkedTexturedProgram : checkedProgram;
         osg::Program* activeProgram = textured ? texturedProgram.get() : program.get();

@@ -96,7 +96,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertLess(enable, scene.index('viewer->realize();'))
         self.assertIn('log->write("OSG GL checking: ONCE_PER_ATTRIBUTE', scene[enable:])
 
-    def test_fine_grained_checks_end_after_the_fifth_completed_osg_frame(self):
+    def test_initial_fine_grained_checks_end_after_the_fifth_completed_osg_frame(self):
         scene = (ROOT / 'src/OSGScene.hpp').read_text(encoding='utf-8')
         frame = scene.split('void frame(double time, int w, int h) {', 1)[1].split('~OSGScene()', 1)[0]
         self.assertLess(frame.index('viewer->frame(time);'), frame.index('++frames;'))
@@ -104,7 +104,7 @@ class IntegrationTests(unittest.TestCase):
                          r'window->getState\(\)->setCheckForGLErrors\(osg::State::ONCE_PER_FRAME\);\s*'
                          r'log->write\("OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames"\);\s*\}')
         self.assertEqual(re.findall(r'setCheckForGLErrors\(osg::State::(\w+)\)', scene),
-                         ['ONCE_PER_ATTRIBUTE', 'ONCE_PER_FRAME'])
+                         ['ONCE_PER_ATTRIBUTE', 'ONCE_PER_ATTRIBUTE', 'ONCE_PER_FRAME', 'ONCE_PER_FRAME'])
         self.assertEqual(scene.count('++frames;'), 1)
         self.assertEqual(scene.count('frames = 0;'), 1)
         main = (ROOT / 'src/main.mm').read_text(encoding='utf-8')

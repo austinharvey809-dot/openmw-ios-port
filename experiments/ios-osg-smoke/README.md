@@ -20,13 +20,140 @@ failure. The prior first-frame LOD-bias error was absent in the new session.
 Five-frame diagnostic registration/restoration and foreground recovery worked;
 the expected missing-windowing-interface warning remains.
 
-**Build #10 status: implemented locally; native compilation and device testing
-pending.** It adds the explicit checkerboard Texture2D scene described next.
+**Build #10: compiled and physically validated.** The checkerboard cube and red
+UV marker rendered correctly, both programs linked, controller/clear switching
+and foreground recovery worked. The run reported 1,007 OSG frames, 1,095 successful
+EGL swaps and approximately 30.05 swaps per active second, nominal thermal state
+and no new GL API errors in the five-frame window. Overlay version 2 remains validated.
+
+**Build #11 status: implemented locally; native compilation and device testing
+pending.** It adds controlled filtering/wrapping profiles below.
 
 The separate `ios-angle-smoke` app remains the user-confirmed physical-device
 baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
 failure/fix sections below are historical records, superseded by the successful
 OSG device milestone where they describe compilation as pending.
+
+## Build #11: bounded filtering and wrapping comparison
+
+Three preconfigured Texture2D instances share the same retained 32x32 OSG Image.
+Each has its own StateSet and immutable filter/wrap settings after construction.
+They share the unchanged textured program and sampler2D unit-0 uniform; shader
+link validation remains independent for the colored and textured programs.
+
+| Profile | Min / mag | S / T wrap | UV range per face |
+| --- | --- | --- | --- |
+| 0: Build #10 baseline (startup) | NEAREST / NEAREST | CLAMP_TO_EDGE | 0..1 |
+| 1: linear comparison | LINEAR / LINEAR | CLAMP_TO_EDGE | 0..1 |
+| 2: tiled repeat | NEAREST / NEAREST | REPEAT | 0..2 (2x2 repeats) |
+
+The original baseline texture setup, image pixels, UVs, shaders and colored
+palette are preserved. Profile 1 uses the same baseline geometry/UVs. Profile 2
+uses a second preallocated geometry/VAO with its own 24 UVs, each baseline UV
+multiplied by two on both axes. Positions, colors and the 36 indices are shared;
+the baseline UV array is never modified. The model selects one retained geode
+and StateSet, with no per-frame image/texture/geometry allocation or mutation of
+shared texture parameters. Colored mode always uses the original base geometry.
+All three textures retain their shared Image, zero LOD bias, level-zero-only
+sampling and disabled hardware mip generation. Neither LINEAR nor NEAREST is a
+mipmapped minification filter, so no CPU mip-generation fallback is requested.
+There are no sampler objects or new compatibility overlays.
+
+The existing mappings use only `extendedGamepad.buttonX` (Square) and `buttonY`
+(Triangle). **D-pad Right** (`extendedGamepad.dpad.right`) was unused and now
+cycles 0 -> 1 -> 2 -> 0. This uses the named directional control rather than
+guessing a new PS4 face-button mapping. It is rising-edge triggered; its previous
+state is primed on controller changes, activation and reconnection just like X/Y.
+Holding Right cannot cycle repeatedly. Square continues toggling colored versus
+the selected textured profile; Triangle toggles clear-only. Cycling while colored
+or clear-only changes the remembered profile without leaving either mode.
+The specific new control still needs physical DS4 validation.
+
+The overlay shows the selected texture profile even when it is remembered during
+colored/clear-only mode. JSON retains `selected_cube` and `clear_only`, adds
+`texture_profile` and a `texture_profiles` array whose `first_traversal_completed`
+flags identify profiles actually traversed in this session. Logs identify profile
+selection and first completed traversal with the OSG frame number. Completion
+does **not** certify a clean GL error state; inspect the raw diagnostic messages.
+
+### First-use diagnostic coverage
+
+The original initialization/first-five-OSG-frame State and KHR_debug windows are
+unchanged. They cover startup profile 0 and any other profiles actually drawn
+within those frames. Clear-only callbacks do not count as OSG frames; selecting
+a profile without rendering it does not mark it traversed.
+
+For a profile first drawn **after** frame five, OSGScene temporarily selects
+ONCE_PER_ATTRIBUTE immediately before that one traversal, logs the profile/frame
+and explicitly notes that KHR_debug is not rearmed. On successful traversal it
+restores ONCE_PER_FRAME and logs completion. Each profile gets at most one such
+extra fine-grained traversal per scene lifetime; revisits, clear toggles and
+foreground return do not reset the flags or extend the callback window. A throwing
+traversal still follows the existing application-failure path and stops rendering;
+it is not marked completed. The five-frame KHR callback is not extended or
+re-registered for later profile selection, and no extra glGetError polls are added.
+
+OSG's checks can consume/report a GL error before the later application poll;
+neither `gl_errors=0` nor `osg_warnings=0` alone proves a clean run. Later first-use
+errors can be localized to an attribute but may not name the GL call. If an error
+appears only in a later profile, retain the exact log/profile and plan a bounded
+callback follow-up rather than claiming the original KHR window covered it.
+Initial upload is checked, but the one-traversal check does not cover every
+possible lazy driver operation on subsequent frames; ordinary per-frame OSG and
+application checks remain active.
+
+### Extra default GL3 shader: inspected evidence
+
+The locally available Build #10 IPA in Downloads (`ios-osg-angle-gate-1-42433632836`)
+contains both default shader strings named `gl3_VertexShader` and
+`gl3_FragmentShader`, each beginning **`#version 300 es`**, plus the message
+`StateSet::setGlobalDefaults() Setting up GL3 compatible shaders`. The older local
+`osg-smoke(2).log` directly records that initialization message, compilation of
+these ESSL 3.00 sources and a program-link attempt. The latest Build #10 runtime
+log was not present in the inspected experiment/Downloads locations; current
+device success/error results above are user-confirmed, not independently replayed.
+
+The evidence supports OSG default/global state shader setup, not use of desktop
+GLSL merely because the shaders are named GL3. The full pinned StateSet source is
+not cached locally, so the exact internal reason for compiling the default program
+is not independently source-verified here. Our model StateSets explicitly select
+the application programs. There is no demonstrated shader failure requiring a
+patch. Default shader paths remain a compatibility surface for future scenes;
+preserve their logs and investigate actual compile/link errors if they arise.
+
+### Build #11 physical acceptance procedure
+
+1. Fresh launch: confirm profile 0, unchanged one-checkerboard-per-face baseline,
+   red marker, rotation/depth, textured link success and both five-frame transitions.
+2. Wait past frame five, then press/release D-pad Right for profile 1. Confirm
+   smoother cell edges from LINEAR, unchanged marker position/UV coverage, and
+   matching first-use diagnostic start/restoration/completion records.
+3. Press Right again for profile 2. Confirm **four** repeated checkerboards/red
+   markers per face, crisp NEAREST cells, no stretched clamp edge, and its own
+   first-use records. Inspect raw OSG GL errors; KHR is inactive at this point.
+4. Cycle back to profile 0: visual baseline unchanged, no new resource uploads
+   intentionally requested and no repeated first-use diagnostic window. Test
+   Square's colored baseline/link check, Triangle's selection restoration, cycling
+   while colored/clear, held Right, disconnect/reconnect and Home Screen return.
+5. Export the new-session log/JSON: all three completion flags true, intended
+   selection, no API/link/application errors, nominal thermal state. Compare
+   sustained swap rate/CPU timing with Build #10; do not call swaps display FPS.
+   Both landscape orientations and repeat sessions remain part of device testing.
+
+These parameters are GLES3 core operations, but new native compilation, lazy
+texture upload/state transitions, shared geometry buffers and visual sampling
+must still be validated on the actual phone. The sampler-object wrap conversion
+concern remains separate and unexercised. No mipmap, anisotropy, sRGB or asset
+loading conclusions follow from this test. Use the unchanged `[run-osg]` opt-in
+workflow and existing strict IPA validator only after manual review/commit.
+
+Local Build #11 checks: OSG 90 passed/four compiler-dependent skips; ANGLE
+76 passed/one compiler-dependent skip; Vulkan 76 passed; Zink 43 passed:
+**285 passed, five skipped**. All 35 Python tool files passed AST parsing.
+JSON/plist, whitespace, exact five-file change scope, unchanged original shaders,
+baseline texture configuration, Renderer/EGL implementation and pinned-source
+reference hashes passed checks. Native compilation/device behavior for these
+new profiles remains untested. No dependency downloads, CI, commits or pushes ran.
 
 ## Build #10: explicit checkerboard Texture2D
 
@@ -158,7 +285,8 @@ OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames
 ```
 
 Frames 1-5 receive fine-grained checks; frame 6 onward retains normal per-frame
-checks. Clear-only swaps do not consume this window. Suspension/foreground return
+checks except for Build #11's bounded first-use profile traversal described above.
+Clear-only swaps do not consume this window. Suspension/foreground return
 does not reset the existing OSG scene or count, so it neither spends nor restarts
 the five-frame budget. If fewer than five OSG frames run, fine-grained checking
 remains selected for that scene until its fifth traversal or destruction. A

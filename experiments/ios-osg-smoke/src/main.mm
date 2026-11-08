@@ -247,7 +247,7 @@ public:
     double rateStart, previousCallback, callbackTotal, cpuTotal;
     unsigned callbacks;
     double swapRate, cpuMs, callbackMs;
-    bool clearOnly, previousY, previousX, buttonsPrimed;
+    bool clearOnly, previousY, previousX, previousRight, buttonsPrimed;
     __weak GCController *previousController;
 }
 @property(nonatomic, strong) CADisplayLink *displayLink;
@@ -294,6 +294,12 @@ public:
     result[@"clear_only"] = @(clearOnly);
     result[@"selected_cube"] = renderer && renderer->osgScene ?
         (renderer->osgScene->isTextured() ? @"textured" : @"colored") : @"unavailable";
+    result[@"texture_profile"] = renderer && renderer->osgScene ? Text(renderer->osgScene->selectedTextureProfile()) : @"unavailable";
+    NSMutableArray *profileResults = [NSMutableArray array];
+    if (renderer && renderer->osgScene) for (unsigned profile = 0; profile < 3; ++profile)
+        [profileResults addObject:@{@"profile": Text(OSGScene::textureProfileName(profile)),
+                                   @"first_traversal_completed": @(renderer->osgScene->textureProfileRendered(profile))}];
+    result[@"texture_profiles"] = profileResults;
     NSData *build = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"angle-build" ofType:@"json"]];
     if (build) result[@"dependency"] = [NSJSONSerialization JSONObjectWithData:build options:0 error:nil] ?: @{};
     NSData *osgBuild = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"osg-build" ofType:@"json"]];
@@ -314,8 +320,8 @@ public:
         self.failure.length ? [@"\nBLOCKED: " stringByAppendingString:self.failure] :
         (renderer && renderer->shaderError.length ? [@"\nClear fallback: " stringByAppendingString:renderer->shaderError] : @"")];
     if (renderer && renderer->osgScene)
-        self.overlay.text = [self.overlay.text stringByAppendingFormat:@"\nOSG traversals: %llu | traversal wall: %.2f ms | warnings/errors: %u",
-            renderer->osgScene->frames, renderer->osgScene->traversalWallMs, renderer->osgScene->warnings()];
+        self.overlay.text = [self.overlay.text stringByAppendingFormat:@"\nSelected texture: %@ | D-pad Right: cycle\nOSG traversals: %llu | traversal wall: %.2f ms | warnings/errors: %u",
+            Text(renderer->osgScene->selectedTextureProfile()), renderer->osgScene->frames, renderer->osgScene->traversalWallMs, renderer->osgScene->warnings()];
 }
 - (void)activate {
     [self view]; [self.view layoutIfNeeded];
@@ -352,13 +358,18 @@ public:
     for (GCController *candidate in GCController.controllers) if (candidate.extendedGamepad) { controller = candidate; break; }
     GCExtendedGamepad *pad = controller.extendedGamepad;
     bool y = pad.buttonY.isPressed, x = pad.buttonX.isPressed;
+    bool right = pad.dpad.right.isPressed;
     if (controller != previousController || !buttonsPrimed) {
         previousController = controller; previousY = y; previousX = x; buttonsPrimed = true;
+        previousRight = right;
     } else {
         if (y && !previousY) clearOnly = !clearOnly;
         if (x && !previousX && renderer && renderer->osgScene)
             renderer->osgScene->setTextured(!renderer->osgScene->isTextured());
+        if (right && !previousRight && renderer && renderer->osgScene)
+            renderer->osgScene->cycleTextureProfile();
         previousY = y; previousX = x;
+        previousRight = right;
     }
     if (renderer && !renderer->sceneAvailable) clearOnly = true;
     try {
