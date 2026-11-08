@@ -1,0 +1,212 @@
+name: iOS OpenMW data-core native validation
+
+# Manual only. GitHub normally requires this workflow on the default branch
+# before offering dispatch; then select ios-port. No commit-message trigger.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPERIMENT: experiments/ios-openmw-core
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  host-validation:
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize failure evidence
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-core-host-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-core-host-build"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\n' "$EVIDENCE" "$BUILD_DIR" >> "$GITHUB_ENV"
+          printf 'Host job requested for %s at %s\n' "$GITHUB_REF" "$GITHUB_SHA" > "$EVIDENCE/run.txt"
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record source and existing toolchain
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            test "$GITHUB_REF" = refs/heads/ios-port
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            git rev-parse HEAD
+            git status --short
+            sw_vers
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk macosx --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-path
+            xcrun --sdk macosx clang++ --version
+            cmake --version
+            ctest --version
+            python3 --version
+            printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          git ls-files -z -- "$EXPERIMENT" .github/workflows/ios-openmw-core.yml \
+            components/files components/platform components/vfs components/misc/strings \
+            | xargs -0 shasum -a 256 > "$EVIDENCE/source-sha256.txt"
+          cp LICENSE "$EVIDENCE/OpenMW-LICENSE.txt"
+      - name: Run isolated Python contracts
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            python3 -m unittest discover -s "$EXPERIMENT/tools" -p 'test_*.py' -v
+          } 2>&1 | tee "$EVIDENCE/python-tests.log"
+      - name: Configure macOS host target
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake -S "$EXPERIMENT" -B "$BUILD_DIR" -G Xcode \
+              -DOPENMW_IOS_CORE_HOST_TESTS=ON \
+              -DCMAKE_CXX_COMPILER="$(xcrun --sdk macosx --find clang++)"
+          } 2>&1 | tee "$EVIDENCE/configure.log"
+      - name: Build and execute the real-source host fixture
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake --build "$BUILD_DIR" --config Release --target openmw-data-core-check -- -jobs 3
+          } 2>&1 | tee "$EVIDENCE/build.log"
+          {
+            set -x
+            ctest --test-dir "$BUILD_DIR" -C Release --output-on-failure --no-tests=error \
+              -R '^openmw-data-core-runtime$'
+          } 2>&1 | tee "$EVIDENCE/ctest.log"
+          echo 'Host fixture passed: actual OpenMW data-component code executed on macOS. No iPhone/Engine execution claim.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve host failure diagnostics and checksums
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/cmake-diagnostics"
+          for file in CMakeCache.txt CMakeFiles/CMakeConfigureLog.yaml Testing/Temporary/LastTest.log Testing/Temporary/LastTestsFailed.log; do
+            if test -f "$BUILD_DIR/$file"; then cp "$BUILD_DIR/$file" "$EVIDENCE/cmake-diagnostics/$(basename "$file")"; fi
+          done
+          if test -s "$BUILD_DIR/Release/libopenmw-ios-data-core.a"; then
+            cp "$BUILD_DIR/Release/libopenmw-ios-data-core.a" "$EVIDENCE/host-libopenmw-ios-data-core.a"
+          fi
+          printf 'Job status before upload: %s\n' '${{ job.status }}' > "$EVIDENCE/job-status.txt"
+          python3 - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          root = Path(os.environ['EVIDENCE'])
+          rows = [hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(root).as_posix()
+                  for p in sorted(root.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS']
+          (root / 'SHA256SUMS').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-openmw-core-host-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-core-host-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  iphoneos-compilation:
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize failure evidence
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-core-device-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-core-device-build"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\n' "$EVIDENCE" "$BUILD_DIR" >> "$GITHUB_ENV"
+          printf 'Device job requested for %s at %s\n' "$GITHUB_REF" "$GITHUB_SHA" > "$EVIDENCE/run.txt"
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record source and existing toolchain
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            test "$GITHUB_REF" = refs/heads/ios-port
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            git rev-parse HEAD
+            git status --short
+            sw_vers
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-path
+            xcrun --sdk iphoneos clang++ --version
+            cmake --version
+            python3 --version
+            printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          git ls-files -z -- "$EXPERIMENT" .github/workflows/ios-openmw-core.yml \
+            components/files components/platform components/vfs components/misc/strings \
+            | xargs -0 shasum -a 256 > "$EVIDENCE/source-sha256.txt"
+          cp LICENSE "$EVIDENCE/OpenMW-LICENSE.txt"
+      - name: Configure iPhoneOS ARM64 static target
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake -S "$EXPERIMENT" -B "$BUILD_DIR" -G Xcode \
+              -DOPENMW_IOS_CORE_HOST_TESTS=OFF -DCMAKE_SYSTEM_NAME=iOS \
+              -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0
+          } 2>&1 | tee "$EVIDENCE/configure.log"
+      - name: Compile the five actual OpenMW translation units
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake --build "$BUILD_DIR" --config Release --target openmw-ios-data-core -- \
+              -jobs 3 CODE_SIGNING_ALLOWED=NO
+          } 2>&1 | tee "$EVIDENCE/build.log"
+      - name: Inspect every device object and validate archive
+        run: |
+          set -euo pipefail
+          archive="$BUILD_DIR/Release-iphoneos/libopenmw-ios-data-core.a"
+          test -s "$archive" || { echo '::error::Expected nonempty device static archive is missing'; exit 1; }
+          cp "$archive" "$EVIDENCE/libopenmw-ios-data-core.a"
+          {
+            set -x
+            python3 "$EXPERIMENT/tools/validate_archive.py" \
+              --archive "$EVIDENCE/libopenmw-ios-data-core.a" --evidence "$EVIDENCE/archive-inspection"
+          } 2>&1 | tee "$EVIDENCE/archive-validation.log"
+          echo 'Device archive passed ARM64/iPhoneOS/18.0 validation for all five objects. No iPhone/Engine execution claim.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve device failure diagnostics and checksums
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/cmake-diagnostics"
+          for file in CMakeCache.txt CMakeFiles/CMakeConfigureLog.yaml; do
+            if test -f "$BUILD_DIR/$file"; then cp "$BUILD_DIR/$file" "$EVIDENCE/cmake-diagnostics/$(basename "$file")"; fi
+          done
+          archive="$BUILD_DIR/Release-iphoneos/libopenmw-ios-data-core.a"
+          if test -s "$archive"; then cp "$archive" "$EVIDENCE/libopenmw-ios-data-core.a"; fi
+          printf 'Job status before upload: %s\n' '${{ job.status }}' > "$EVIDENCE/job-status.txt"
+          python3 - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          root = Path(os.environ['EVIDENCE'])
+          rows = [hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(root).as_posix()
+                  for p in sorted(root.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS']
+          (root / 'SHA256SUMS').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-openmw-core-device-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-core-device-evidence/
+          if-no-files-found: error
+          retention-days: 14
