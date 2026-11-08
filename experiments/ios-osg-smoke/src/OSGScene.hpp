@@ -273,15 +273,28 @@ void main() { result=texture(checkerTexture, uv); }
         model->setMatrix(osg::Matrix::rotate(time*0.55, osg::Vec3(0,0,1)));
         if (textured && textureProfile == 3) {
             if (!mipmapCapabilityChecked) {
-                auto* extensions = window->getState()->get<osg::GLExtensions>();
+                // Renderer::draw verifies the owning EGL context is current before
+                // calling frame(). State::get<GLExtensions>() does not create it.
+                auto* state = window->getState();
+                auto* extensions = state->get<osg::GLExtensions>();
+                log->write(std::string("OSG mipmap State extensions before initialization: ") +
+                           (extensions ? "present; reuse State-owned object" : "absent; capability not yet tested"));
+                if (!extensions) {
+                    log->write("OSG mipmap initialization: State::initializeExtensionProcs() before texture traversal; owning EGL context checked by Renderer");
+                    state->initializeExtensionProcs();
+                    extensions = state->get<osg::GLExtensions>();
+                }
+                log->write(std::string("OSG mipmap State extensions after initialization: ") + (extensions ? "present" : "absent"));
+                if (!extensions)
+                    throw std::runtime_error("Mipmap profile blocked: State extension initialization returned no object; hardware capability remains untested");
                 mipmapEntryPointAvailable = extensions && extensions->glGenerateMipmap;
                 mipmapCapabilitySupported = extensions && (extensions->isGenerateMipMapSupported || extensions->isFrameBufferObjectSupported);
                 mipmapCapabilityChecked = true;
                 log->write(std::string("OSG mipmap gate: capability=") + (mipmapCapabilitySupported ? "true" : "false") +
                            "; glGenerateMipmap pointer=" + (mipmapEntryPointAvailable ? "available" : "missing") +
-                           "; request=true; actual execution UNKNOWN (not intercepted)");
+                           "; State extensions initialized; request=true; actual execution UNKNOWN (not intercepted)");
                 if (!mipmapCapabilitySupported || !mipmapEntryPointAvailable)
-                    throw std::runtime_error("Mipmap profile blocked: hardware generation capability/entry point unavailable; CPU fallback is not accepted");
+                    throw std::runtime_error("Mipmap profile blocked: hardware generation capability/entry point unavailable after State initialization; CPU fallback is not accepted");
             }
             model->setMatrix(osg::Matrix::identity());
             // Screen-right and screen-up are perpendicular to the fixed view vector.

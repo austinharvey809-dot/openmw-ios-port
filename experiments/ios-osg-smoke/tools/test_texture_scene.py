@@ -279,6 +279,104 @@ void main() { result=color; }
         # Actual helper execution (including zero, one, NPOT and chain sizes)
         # is part of the optional C++ pixel fixture above, not this source check.
 
+    def test_state_initializer_precedes_capability_reads_and_uses_state_ownership(self):
+        frame = SCENE.split('void frame(double time, int w, int h)', 1)[1]
+        gate = frame.split('if (!mipmapCapabilityChecked)', 1)[1].split('model->setMatrix(osg::Matrix::identity());', 1)[0]
+        reads = [m.start() for m in re.finditer(re.escape('state->get<osg::GLExtensions>()'), gate)]
+        self.assertEqual(len(reads), 2)
+        initialize = gate.index('state->initializeExtensionProcs();')
+        self.assertLess(reads[0], initialize)
+        self.assertLess(initialize, reads[1])
+        self.assertLess(reads[1], gate.index('mipmapEntryPointAvailable ='))
+        self.assertIn('if (!extensions) {', gate[:initialize])
+        self.assertIn('if (!extensions)\n                    throw std::runtime_error(', gate[reads[1]:])
+        self.assertLess(gate.index('hardware capability remains untested'), gate.index('mipmapCapabilityChecked = true;'))
+        self.assertNotIn('GLExtensions::Get(', SCENE)
+        self.assertNotIn('new osg::GLExtensions', SCENE)
+        self.assertIn('before initialization:', gate)
+        self.assertIn('after initialization:', gate)
+        self.assertIn('unavailable after State initialization', gate)
+
+    def test_owning_context_check_dominates_initialization_and_failed_gate_draw(self):
+        draw = MAIN.split('bool draw(double seconds, bool clearOnly)', 1)[1].split('~Renderer()', 1)[0]
+        self.assertLess(draw.index('eglGetCurrentContext() != context || eglGetCurrentDisplay() != display'),
+                        draw.index('osgScene->frame(seconds, width, height);'))
+        self.assertIn('throw std::runtime_error("External ANGLE context is not current before OSG frame")', draw)
+        self.assertNotIn('eglMakeCurrent(', draw)
+        frame = SCENE.split('void frame(double time, int w, int h)', 1)[1]
+        self.assertLess(frame.index('state->initializeExtensionProcs();'), frame.index('viewer->frame(time);'))
+        self.assertLess(frame.index('CPU fallback is not accepted'), frame.index('viewer->frame(time);'))
+        self.assertLess(draw.index('catch (...) { stopDebug("OSG traversal failure"); throw; }'),
+                        draw.index('eglSwapBuffers(display, surface)'))
+        tick = MAIN.split('- (void)tick:', 1)[1]
+        self.assertIn('self.failure = Text(error.what()); Log(self.failure); [self deactivate]; return;', tick)
+
+    def test_actual_gate_control_flow_cpp_fixture(self):
+        compiler = shutil.which('clang++') or shutil.which('g++')
+        if not compiler:
+            self.skipTest('C++ compiler unavailable; State initialization gate fixture not executed')
+        gate = SCENE.split('if (!mipmapCapabilityChecked)', 1)[1].split('model->setMatrix(osg::Matrix::identity());', 1)[0]
+        # Execute the production gate body with synthetic State/GL declarations.
+        # This tests control flow, not the actual pinned State implementation/ABI.
+        fixture = r'''
+#include <cassert>
+#include <stdexcept>
+#include <string>
+namespace osg { struct GLExtensions {
+    bool glGenerateMipmap = true;
+    bool isGenerateMipMapSupported = true;
+    bool isFrameBufferObjectSupported = false;
+}; }
+struct State {
+    osg::GLExtensions owned;
+    osg::GLExtensions* object = nullptr;
+    bool create = true;
+    unsigned calls = 0;
+    template<class T> T* get() { return object; }
+    void initializeExtensionProcs() { ++calls; if (create) object = &owned; }
+};
+struct Window { State state; State* getState() { return &state; } };
+struct Logger { void write(const std::string&) {} };
+struct Gate {
+    Window storage; Window* window = &storage;
+    Logger logger; Logger* log = &logger;
+    bool mipmapCapabilityChecked = false;
+    bool mipmapEntryPointAvailable = false;
+    bool mipmapCapabilitySupported = false;
+    unsigned renders = 0;
+    void frame() { if (!mipmapCapabilityChecked) GATE_BODY ++renders; }
+};
+int main() {
+    Gate fresh; fresh.frame(); fresh.frame();
+    assert(fresh.storage.state.calls == 1 && fresh.renders == 2);
+    assert(fresh.mipmapCapabilityChecked && fresh.mipmapCapabilitySupported && fresh.mipmapEntryPointAvailable);
+    Gate existing; existing.storage.state.object = &existing.storage.state.owned; existing.frame();
+    assert(existing.storage.state.calls == 0 && existing.renders == 1);
+    Gate absent; absent.storage.state.create = false;
+    try { absent.frame(); assert(false); } catch (const std::runtime_error& e) {
+        assert(std::string(e.what()).find("remains untested") != std::string::npos);
+    }
+    assert(absent.renders == 0 && !absent.mipmapCapabilityChecked);
+    Gate unsupported; unsupported.storage.state.owned.isGenerateMipMapSupported = false;
+    try { unsupported.frame(); assert(false); } catch (const std::runtime_error& e) {
+        assert(std::string(e.what()).find("after State initialization") != std::string::npos);
+    }
+    assert(unsupported.renders == 0 && unsupported.mipmapCapabilityChecked && !unsupported.mipmapCapabilitySupported);
+    Gate missing; missing.storage.state.owned.glGenerateMipmap = false;
+    try { missing.frame(); assert(false); } catch (const std::runtime_error&) {}
+    assert(missing.renders == 0 && !missing.mipmapEntryPointAvailable);
+    Gate fbo; fbo.storage.state.owned.isGenerateMipMapSupported = false;
+    fbo.storage.state.owned.isFrameBufferObjectSupported = true; fbo.frame();
+    assert(fbo.renders == 1 && fbo.mipmapCapabilitySupported);
+}
+'''.replace('GATE_BODY', gate)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'state-gate.cpp'
+            binary = Path(directory) / 'state-gate.exe'
+            source.write_text(fixture, encoding='utf-8')
+            subprocess.run([compiler, '-std=c++11', str(source), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_comparison_pairs_are_preallocated_and_equivalent_except_filter(self):
         block = SCENE.split('minificationGroup = new osg::Group;', 1)[1].split('applySelection();', 1)[0]
         self.assertIn('for (unsigned i = 0; i < 6; ++i)', block)

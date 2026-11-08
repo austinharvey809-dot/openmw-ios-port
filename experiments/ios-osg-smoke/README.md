@@ -31,8 +31,9 @@ The user reported 1,307 OSG frames, 1,339 successful EGL swaps, approximately
 30.28 swaps per active second, zero application-polled GL errors and nominal
 thermal state. Application error counts alone are not a complete GL-error audit.
 
-**Build #12 status: implemented locally; native compilation/device validation
-pending.** It adds one mipmapped profile and a matched minification comparison.
+**Build #12: native compilation passed; both physical launches stopped at the
+pre-traversal capability gate.** No OSG frame or EGL swap completed. The correction
+below is implemented locally and awaits native compilation/device validation.
 
 The separate `ios-angle-smoke` app remains the user-confirmed physical-device
 baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
@@ -40,6 +41,77 @@ failure/fix sections below are historical records, superseded by the successful
 OSG device milestone where they describe compilation as pending.
 
 ## Build #12: mipmapped texture minification
+
+### Device failure and State initialization-order correction
+
+Both original Build #12 launches identified GLES3 / ANGLE Metal / Apple A18 and
+OSG context ID 0, then logged capability=false and a missing generation pointer.
+OSG frames and successful swaps remained zero, without shader or reported GL API
+errors; KHR_debug registered and cleaned up on the controlled failure. These
+results do **not** demonstrate unsupported mipmap hardware.
+
+The user's exact-revision State audit establishes that `State::get<GLExtensions>()`
+returns `_glExtensions.get()` without creating it, and that
+`State::initializeExtensionProcs()` populates it using
+`GLExtensions::Get(contextID, true)`. The independently inspected original
+GLExtensions.cpp:424-429 confirms the per-context lazy factory; its constructor
+at 441 onward immediately queries GL_VERSION and therefore needs a current context.
+Prior local device logs (`osg-smoke(2).log`) show the State initialization message
+during successful rendering; the failed launches stop before it, per the user's
+Build #12 investigation. State header/implementation and renderer lifecycle source
+are not cached locally, so those specific source findings are user-provided,
+not an independent full-source verification in this follow-up.
+
+The old gate ran before `viewer->frame()` could initialize State, conflating a
+null State extension object with missing hardware capabilities. The correction
+keeps the gate in place and uses State's existing public initializer:
+
+1. `Renderer::draw` verifies the application-owned EGL display/context is current
+   before calling OSGScene::frame; no intervening context switch is added.
+2. Before traversal, the gate reads/logs whether State already has the object.
+3. If absent, it logs and calls `state->initializeExtensionProcs()`, then reads
+   the extension object back from the same State. An existing object is reused.
+4. A still-null object fails as **initialization failure / hardware untested**;
+   `capability_checked` remains false. It is not labeled unsupported hardware.
+5. Otherwise the existing capability and pointer tests run and log their results.
+   Genuine unavailability after initialization still fails explicitly; the CPU
+   fallback is not accepted. Neither failure proceeds to traversal or a swap.
+
+Calling the cache factory alone could create a GLExtensions object without
+populating this State's `_glExtensions` or performing its normal initialization.
+Using State's public initializer preserves ownership, context ID and normal
+initialization bookkeeping. No replacement object, forced capability, cache Set,
+OSG source overlay or deferred "draw first, test later" workaround is introduced.
+The successful path still tests capability before the image-backed mipmap scene
+is traversed, while the owning EGL context is current.
+
+New log records distinguish `before initialization`, the State initialization
+step (or reuse), `after initialization`, and the resulting gate capability/pointer
+values. The original gate and failure diagnostics are retained with initialization
+context. The three cube pairs, four profile settings, controllers, resource
+ownership, independent program checks, error reporting, cleanup and both bounded
+diagnostic schemes are unchanged. `generate_call_observed` remains **null**.
+Passing this corrected gate will establish initialization/capability availability,
+not execution of generation, completed uploads or visible mipmap sampling.
+
+Local follow-up validation: OSG **98 passed/five compiler-dependent skips**, ANGLE
+76 passed/one skip, Vulkan 76 passed and Zink 43 passed: **293 passed, six skipped**.
+New checks cover initialization/readback order, State ownership, owning-context
+validation and failure before traversal/swap. An additional optional C++ fixture
+executes the actual production gate body with synthetic State declarations for
+fresh/existing objects, failed initialization, unsupported capability, missing
+pointer and the FBO eligibility branch. That fixture was skipped locally; it does
+not establish actual pinned-State ABI or device behavior even when executed.
+Python syntax, JSON/plist, whitespace, unchanged original reference hashes and
+three-file experiment-only scope checks passed. No downloads, CI, native builds,
+commits or pushes ran.
+
+The next manual opt-in build must compile the public State call against the pinned
+headers. On the phone, inspect the before/action/after records, non-null object,
+actual capability/pointer results, then whether the first OSG traversal and swap
+complete without errors. If the initialized gate fails, preserve that exact result
+as a blocker; do not bypass it. The visual/thermal/lifecycle acceptance procedure
+below remains pending.
 
 Profile 3 adds exactly one retained Texture2D using the existing shared, OSG-owned
 32x32 RGBA checkerboard Image. Its settings are LINEAR_MIPMAP_LINEAR minification,
@@ -155,8 +227,8 @@ performance comparison against the prior single-cube application.
    evidence, expected dimensions, error messages/counts, swap/CPU measurements
    and thermal state. Measure sustained behavior; swaps are not display FPS.
 
-Native compilation, OSG resource reuse, actual generation execution, mip allocation
-and physical sampling remain unverified for Build #12. No native build, downloads,
+Native compilation of the correction, OSG resource reuse, actual generation execution,
+mip allocation and physical sampling remain unverified. No native build, downloads,
 CI, commits or pushes were performed. Existing pins, overlay version 2, EGL/Metal
 ownership, single-threaded traversal, packaging and workflows remain unchanged.
 
