@@ -262,16 +262,19 @@ public:
     [super viewDidLoad];
     self.failure = @"";
     self.overlay = [[UILabel alloc] init];
-    self.overlay.numberOfLines = 0; self.overlay.textColor = UIColor.whiteColor;
+    self.overlay.numberOfLines = 6; self.overlay.textColor = UIColor.whiteColor;
+    self.overlay.lineBreakMode = NSLineBreakByTruncatingTail;
+    self.overlay.textAlignment = NSTextAlignmentCenter;
     self.overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
-    self.overlay.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
+    self.overlay.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
     self.overlay.translatesAutoresizingMaskIntoConstraints = NO;
     self.overlay.userInteractionEnabled = NO;
     [self.view addSubview:self.overlay];
     [NSLayoutConstraint activateConstraints:@[
         [self.overlay.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:8],
         [self.overlay.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
-        [self.overlay.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-8]]];
+        [self.overlay.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-8],
+        [self.overlay.heightAnchor constraintLessThanOrEqualToConstant:88]]];
     Log(@"New OSG ANGLE session; requested callback rate 30 Hz; display FPS unmeasured");
 }
 - (void)exportResults {
@@ -316,23 +319,29 @@ public:
     [json writeToFile:Documents(@"osg-smoke.json") atomically:YES];
 }
 - (void)updateOverlay {
-    NSString *identity = renderer ? renderer->identity[@"gl_renderer"] : @"initializing";
+    OSGScene *scene = renderer ? renderer->osgScene.get() : nullptr;
+    const bool comparison = !clearOnly && scene && scene->isTextured() &&
+        std::strcmp(scene->selectedTextureProfile(), OSGScene::textureProfileName(3)) == 0;
+    NSString *capability = @"NOT TESTED";
+    if (scene && scene->mipmapCapabilityChecked)
+        capability = scene->mipmapCapabilitySupported && scene->mipmapEntryPointAvailable ? @"AVAILABLE" : @"UNAVAILABLE";
+    NSString *status = [NSString stringWithFormat:@"Triangle/Y: clear | Square/X: cube | D-pad Right: profile | %@",
+        previousController ? @"controller connected" : @"controller absent"];
+    if (self.failure.length) status = [@"BLOCKED: " stringByAppendingString:self.failure];
+    else if (renderer && renderer->shaderError.length) status = [@"Clear fallback: " stringByAppendingString:renderer->shaderError];
+    // Keep the status on one line; full messages/identity/timings remain in log/JSON.
+    status = [status stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
     self.overlay.text = [NSString stringWithFormat:
-        @"OSG / ANGLE Metal / GLES3 — %@\nRequested callbacks: 30 Hz | display FPS: unmeasured\n"
-        @"Successful EGL swaps: %llu | active rate: %.1f/s\nCPU callback mean: %.2f ms | interval mean: %.2f ms\n"
-        @"GL errors: %u | thermal: %@ | %dx%d pixels\nTriangle/Y: clear toggle | Square/X: texture/color | %@\n%@%@",
-        clearOnly ? @"clear" : (renderer && renderer->osgScene && renderer->osgScene->isTextured() ? @"textured cube" : @"colored cube"), swaps, swapRate, cpuMs, callbackMs,
+        @"%@\nActive texture profile: %@ | mode: %@\n"
+        @"Mipmap capability: %@ | Actual generation call: UNKNOWN\n"
+        @"Requested: 30 Hz | EGL swaps: %llu (%.1f/s active) | Display FPS: unmeasured\n"
+        @"OSG: %llu | WARN+: %u | App GL errors: %u | Thermal: %@ | CPU: %.2f ms\n%@",
+        comparison ? @"MIPMAP — LEFT    |    LINEAR — RIGHT" : @"OSG / GLES3 / ANGLE Metal",
+        scene ? Text(scene->selectedTextureProfile()) : @"unavailable",
+        clearOnly ? @"clear" : (scene && scene->isTextured() ? @"textured" : @"colored"), capability,
+        swaps, swapRate, scene ? scene->frames : 0, scene ? scene->warnings() : 0,
         renderer ? renderer->errors : 0, @[@"nominal", @"fair", @"serious", @"critical"][NSProcessInfo.processInfo.thermalState],
-        renderer ? renderer->width : 0, renderer ? renderer->height : 0,
-        previousController ? @"controller connected" : @"controller absent", identity ?: @"",
-        self.failure.length ? [@"\nBLOCKED: " stringByAppendingString:self.failure] :
-        (renderer && renderer->shaderError.length ? [@"\nClear fallback: " stringByAppendingString:renderer->shaderError] : @"")];
-    if (renderer && renderer->osgScene)
-        self.overlay.text = [self.overlay.text stringByAppendingFormat:@"\nSelected texture: %@ | D-pad Right: cycle\nOSG traversals: %llu | traversal wall: %.2f ms | warnings/errors: %u",
-            Text(renderer->osgScene->selectedTextureProfile()), renderer->osgScene->frames, renderer->osgScene->traversalWallMs, renderer->osgScene->warnings()];
-    if (renderer && renderer->osgScene && renderer->osgScene->isTextured() &&
-        std::strcmp(renderer->osgScene->selectedTextureProfile(), OSGScene::textureProfileName(3)) == 0)
-        self.overlay.text = [self.overlay.text stringByAppendingString:@"\nPairs: left=mip, right=LINEAR; top to bottom smaller\nMipmap generation: requested; GL call execution unmeasured"];
+        cpuMs, status];
 }
 - (void)activate {
     [self view]; [self.view layoutIfNeeded];

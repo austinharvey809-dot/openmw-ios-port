@@ -301,10 +301,13 @@ void main() { result=texture(checkerTexture, uv); }
             // Each row's pair has equal depth, scale, rotation and base UVs.
             const osg::Vec3 screenRight(0.8574929f, 0.5144958f, 0.0f);
             const osg::Vec3 screenUp(-0.2353796f, 0.3922993f, 0.8892118f);
-            const float scales[3] = {0.2f, 0.05f, 0.0125f};
+            // At drawable height 1290, sampled projected edges are roughly
+            // 60-189 / 13-27 / 8-14 pixels. The lower rows still minify 32px UVs.
+            const float scales[3] = {0.40f, 0.060f, 0.032f};
+            const float rowOffsets[3] = {0.35f, -0.65f, -1.40f};
             for (unsigned i = 0; i < 6; ++i) {
                 const unsigned row = i / 2;
-                const osg::Vec3 position = screenRight * (i % 2 == 0 ? -0.65f : 0.65f) + screenUp * (1.0f - row);
+                const osg::Vec3 position = screenRight * (i % 2 == 0 ? -1.65f : 1.65f) + screenUp * rowOffsets[row];
                 comparisonModels[i]->setMatrix(osg::Matrix::scale(scales[row], scales[row], scales[row]) *
                     osg::Matrix::rotate(time*0.55, osg::Vec3(0,0,1)) * osg::Matrix::translate(position));
             }

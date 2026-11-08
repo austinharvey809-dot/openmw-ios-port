@@ -33,12 +33,128 @@ thermal state. Application error counts alone are not a complete GL-error audit.
 
 **Build #12: native compilation passed; both physical launches stopped at the
 pre-traversal capability gate.** No OSG frame or EGL swap completed. The correction
-below is implemented locally and awaits native compilation/device validation.
+below subsequently passed native compilation and physical validation in Build #13.
+
+**Build #13: physically validated.** State initialization and the capability gate
+work on iPhone 16 Plus: capability and glGenerateMipmap entry point available,
+all four profiles traversed, six comparison cubes rendered, 3,415 OSG frames,
+3,614 successful EGL swaps and approximately 30.18 swaps per active second.
+The user reported zero application GL errors, nominal thermal state and working
+colored/textured/clear modes. Actual generation-call execution remains unobserved.
+
+**Build #14 status: implemented locally; native compilation and physical visual
+validation pending.** It adjusts only comparison layout and UILabel diagnostics.
 
 The separate `ios-angle-smoke` app remains the user-confirmed physical-device
 baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
 failure/fix sections below are historical records, superseded by the successful
 OSG device milestone where they describe compilation as pending.
+
+## Build #14: comparison visibility and compact diagnostics
+
+The same six cubes remain: three pairs, mipmapped left and nonmipmapped LINEAR
+right. The camera, 50-degree vertical FOV, perspective projection, shaders, texture
+settings, UVs and rotating geometry are unchanged. Each pair keeps the same scale,
+rotation and center viewing depth. Only layout constants changed:
+
+| Row | Uniform scale | Camera-up offset | Purpose |
+| --- | --- | --- | --- |
+| Large (top) | 0.40 | 0.35 | Clearly readable checkerboard reference |
+| Medium | 0.060 | -0.65 | Visible cube with modest/foreshortened minification |
+| Small (bottom) | 0.032 | -1.40 | Stronger minification with a legible silhouette |
+
+Column centers now sit at camera-right **-1.65 / +1.65**, instead of -0.65/+0.65.
+Camera-right/up are perpendicular to the fixed eye vector, so translation leaves
+each pair's center depth equal. Finite off-axis perspective can still produce
+slightly different projected edge lengths between columns; this is a paired
+world-geometry comparison, not identical screen-space footprints.
+
+For eye distance `sqrt(43) = 6.557`, drawable height H and uniform scale s, a
+front-facing edge of the original two-unit cube projects approximately to
+`H * s / (sqrt(43) * tan(25 degrees))` pixels. With **assumed H=1290**, this is
+about 169 / 25 / 14 pixels. An independent numerical projection over cube edges,
+rotations and both columns gives the following approximate ranges:
+
+| Row | Projected edge range at H=1290 | Vertical occupied range |
+| --- | --- | --- |
+| Large | 60-189 px | y=451-704 px |
+| Medium | 13-27 px | y=762-803 px |
+| Small | 8-14 px | y=929-952 px |
+
+These are mathematical estimates, **not physical measurements or measured mip
+LODs**. The old smallest scale 0.0125 produced roughly five-pixel edges by the
+simple estimate; the revised small row is much easier to locate. Medium's largest
+sampled edge is about 26.5 px, still less than the 32-pixel texture dimension; the
+small row's largest edge is about 14.1 px. Thus source-to-screen ratios are at
+least approximately 1.2 and 2.3 along those longest sampled edges; foreshortening
+increases minification. At H=1440, the medium maximum remains below 32 px (about
+29.6). Estimates scale with actual drawable height: inspect `surface_pixels` in
+the export, and do not extrapolate a minification guarantee to arbitrary displays.
+UV derivatives, rotation and face orientation determine actual sampling; no
+individual mip level or generation call is measured.
+
+The existing single UIKit UILabel is now a full-safe-width top strip, centered,
+10-point monospaced text, at most six lines and at most **88 points** high, with
+an eight-point inset. Its comparison heading explicitly reads **MIPMAP — LEFT |
+LINEAR — RIGHT**. Remaining lines identify the active texture profile and selected
+mode, mipmap capability (NOT TESTED / AVAILABLE / UNAVAILABLE), **Actual generation
+call: UNKNOWN**, requested callback rate, successful swap count/rate, unmeasured
+display FPS, OSG traversal/WARN+ counts, app-polled GL errors, thermal state, CPU
+callback time and controller hints. Capability is AVAILABLE only when the existing
+post-initialization capability and pointer checks both succeeded. A failure or
+shader fallback replaces the final control-hint line so it remains visible.
+
+Long text is truncated at the tail to keep the strip bounded; the full failure,
+renderer identity, surface dimensions, callback interval and traversal wall timing
+remain in the unchanged log/JSON export. This changes presentation, not error
+reporting. At assumed 3x scale the large row begins near y=150 points, leaving a
+gap below the 88-point strip plus inset and a modest top safe-area inset. The
+numerical regression includes margins for an additional 20-point top inset and
+34-point bottom inset, but actual UIKit text layout and safe areas still need
+device inspection in both landscape orientations.
+
+No OSG labels, shader programs, geometry objects, texture resources or rendering
+paths were added. The arrays/vectors/matrices remain stack values; GPU resources
+are still constructed once. Overlay formatting retains the existing roughly
+one-second active refresh plus lifecycle updates, with no added per-frame logging.
+The four profiles, startup profile 3, colored/clear fallback, controls, State
+initialization correction, gate, five-frame diagnostics and one external swap
+remain unchanged. No GL-call interception is introduced; JSON still records
+`generate_call_observed: null`.
+
+### Build #14 iPhone acceptance
+
+1. Fresh launch: verify the six comparison cubes, three clearly separated rows
+   and left/right labels. The top strip must not cover any cube; all six diagnostic
+   lines must be readable in both landscape orientations.
+2. Inspect the large checkerboard/red marker; compare visible medium/small
+   silhouettes and shimmer. Left should tend toward smoother averaged sampling,
+   right may alias more. Do not infer particular LODs or generation execution.
+3. Confirm capability AVAILABLE, generation UNKNOWN, successful textured linking,
+   both five-frame diagnostic transitions and no new raw OSG/KHR GL errors. Check
+   the new session rather than appended earlier sessions; counters alone are
+   insufficient proof of GL correctness.
+4. Cycle all four profiles and exercise Square, Triangle, held-button/reconnect
+   handling and Home Screen return. Baseline views and selections must persist.
+5. Export surface dimensions, profile traversal flags, swap/CPU/error diagnostics
+   and thermal state. Compare sustained nominal behavior with Build #13 without
+   calling successful swaps display FPS or claiming a performance improvement.
+
+Native compilation and actual display legibility/sampling for Build #14 remain
+untested. No dependency updates, source-overlay changes, downloads, native builds,
+CI runs, commits or pushes were performed.
+
+Local validation: OSG **100 passed/five compiler-dependent skips**; ANGLE 76 passed/
+one skip; Vulkan 76 passed; Zink 43 passed: **295 passed, six skipped** overall.
+The new numerical projection regression executes locally over 180 rotations,
+12 edges and both columns, checking medium minification through H=1440, small
+visibility, row/column separation and overlay/bottom margins. Overlay contracts
+check labels, capability states, bounded presentation, visible failure status and
+the existing one-second refresh. All 35 Python files passed AST parsing; JSON/
+plist, whitespace, four-file scope and exact preservation of scene resources,
+gate/diagnostics, Renderer, JSON exports, controllers and lifecycle code passed.
+An independent read-only review found no source-level issue; actual UIKit layout
+and sampling remain device checks.
 
 ## Build #12: mipmapped texture minification
 
@@ -191,7 +307,7 @@ not by itself expose ANGLE's internal Metal/GPU scheduling or generation cost.
 
 Only profile 3 replaces the single-cube view with three pairs of rotating cubes:
 **left = mipmapped; right = existing nonmipmapped LINEAR profile 1**. Top-to-bottom
-scales are 0.2, 0.05 and 0.0125. Each row shares the same base geometry, 0..1 UVs,
+scales are now 0.40, 0.060 and 0.032 (revised by Build #14 above). Each row shares the same base geometry, 0..1 UVs,
 shader, rotation, scale and view depth. Translation is along camera-right/up axes
 perpendicular to the fixed view vector, so a pair has equivalent perspective and
 lighting-free sampling conditions. Six transforms are created once and share the

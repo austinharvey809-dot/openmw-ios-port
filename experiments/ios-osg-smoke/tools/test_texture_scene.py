@@ -214,7 +214,8 @@ void main() { result=color; }
             self.assertIn(name, SCENE)
         for key in ('texture_profile', 'texture_profiles', 'first_traversal_completed'):
             self.assertIn('@"' + key + '"', MAIN)
-        self.assertIn('Selected texture: %@ | D-pad Right: cycle', MAIN)
+        self.assertIn('Active texture profile: %@', MAIN)
+        self.assertIn('D-pad Right: profile', MAIN)
         self.assertIn('OSG selected texture profile:', SCENE)
         self.assertIn('inspect raw GL diagnostics, not a pass certificate', SCENE)
 
@@ -384,10 +385,11 @@ int main() {
         self.assertIn('comparisonModels[i]->addChild(baseGeode.get());', block)
         self.assertIn('const unsigned row = i / 2;', SCENE)
         self.assertIn('osg::Matrix::scale(scales[row], scales[row], scales[row])', SCENE)
-        self.assertIn('screenRight * (i % 2 == 0 ? -0.65f : 0.65f)', SCENE)
-        self.assertIn('left=mip, right=LINEAR', MAIN)
+        self.assertIn('screenRight * (i % 2 == 0 ? -1.65f : 1.65f)', SCENE)
+        self.assertIn('screenUp * rowOffsets[row]', SCENE)
+        self.assertIn('MIPMAP — LEFT    |    LINEAR — RIGHT', MAIN)
         scales = [float(x.rstrip('f')) for x in re.search(r'const float scales\[3\] = \{([^}]+)\}', SCENE)[1].split(',')]
-        self.assertEqual(scales, [.2, .05, .0125])
+        self.assertEqual(scales, [.40, .060, .032])
         eye = (3, -5, 3)
         for axis in ('screenRight', 'screenUp'):
             vector = [float(x.rstrip('f')) for x in re.search(r'const osg::Vec3 ' + axis + r'\(([^)]+)\)', SCENE)[1].split(',')]
@@ -398,6 +400,81 @@ int main() {
         radius = math.sqrt(3)*scales[-1]
         pixels = 1600*radius/((math.sqrt(43)-radius)*math.tan(math.radians(25)))
         self.assertLess(pixels, 32)
+
+    def test_projected_pairs_remain_visible_minified_and_clear_of_overlay(self):
+        def values(pattern):
+            return [float(v.rstrip('f')) for v in re.search(pattern, SCENE)[1].split(',')]
+        scales = values(r'const float scales\[3\] = \{([^}]+)\}')
+        rows = values(r'const float rowOffsets\[3\] = \{([^}]+)\}')
+        right = values(r'const osg::Vec3 screenRight\(([^)]+)\)')
+        up = values(r'const osg::Vec3 screenUp\(([^)]+)\)')
+        self.assertEqual(rows, [.35, -.65, -1.40])
+        self.assertIn('setViewMatrixAsLookAt(osg::Vec3(3,-5,3)', SCENE)
+        self.assertIn('setProjectionMatrixAsPerspective(50.0, double(w)/h, 0.1, 100.0)', SCENE)
+        # Sample the actual geometry constants under the fixed camera. These are
+        # mathematical raster estimates, not measured pixels or actual sampled LOD.
+        eye = (3, -5, 3)
+        distance = math.sqrt(43)
+        forward = [-v / distance for v in eye]
+        corners = [(x, y, z) for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]
+        edges = [(i, j) for i, a in enumerate(corners) for j, b in enumerate(corners)
+                 if i < j and sum(x != y for x, y in zip(a, b)) == 1]
+        self.assertEqual(len(edges), 12)
+        dot = lambda a, b: sum(x*y for x, y in zip(a, b))
+        focal = 1290 / (2 * math.tan(math.radians(25)))
+        row_bounds = []
+        edge_ranges = []
+        for scale, row in zip(scales, rows):
+            row_y, lengths, column_x = [], [], [[], []]
+            for column, side in enumerate((-1.65, 1.65)):
+                center = [r*side + u*row for r, u in zip(right, up)]
+                self.assertAlmostEqual(dot(center, forward), 0, places=5)
+                for degree in range(0, 360, 2):
+                    c, s = math.cos(math.radians(degree)), math.sin(math.radians(degree))
+                    projected = []
+                    for x, y, z in corners:
+                        rotated = (scale*(c*x-s*y), scale*(s*x+c*y), scale*z)
+                        relative = [a+b-e for a, b, e in zip(rotated, center, eye)]
+                        depth = dot(relative, forward)
+                        self.assertGreater(depth, .1)
+                        px = 2796/2 + focal*dot(relative, right)/depth
+                        py = 1290/2 - focal*dot(relative, up)/depth
+                        projected.append((px, py))
+                        row_y.append(py)
+                        column_x[column].append(px)
+                    lengths.extend(math.dist(projected[a], projected[b]) for a, b in edges)
+            self.assertLess(max(column_x[0]), min(column_x[1]))
+            row_bounds.append((min(row_y), max(row_y)))
+            edge_ranges.append((min(lengths), max(lengths)))
+        self.assertGreater(edge_ranges[0][1], 150)  # legible large reference
+        self.assertLess(edge_ranges[1][1] * 1440/1290, 32)  # still minified at H=1440
+        self.assertGreater(edge_ranges[2][0], 7)  # small edges no longer ~1-5 px
+        self.assertLess(edge_ranges[2][1], 16)
+        self.assertGreater(row_bounds[0][0] / 3, 88 + 8 + 20)  # allow top safe inset
+        self.assertLess(row_bounds[0][1], row_bounds[1][0])
+        self.assertLess(row_bounds[1][1], row_bounds[2][0])
+        self.assertLess(row_bounds[2][1] / 3, 430 - 34 - 8)
+
+    def test_compact_overlay_labels_capability_unknown_call_and_failures(self):
+        layout = MAIN.split('- (void)viewDidLoad', 1)[1].split('- (void)exportResults', 1)[0]
+        overlay = MAIN.split('- (void)updateOverlay', 1)[1].split('- (void)activate', 1)[0]
+        for text in ('self.overlay.numberOfLines = 6;', 'monospacedSystemFontOfSize:10',
+                     'self.overlay.lineBreakMode = NSLineBreakByTruncatingTail;',
+                     'self.overlay.trailingAnchor constraintEqualToAnchor:',
+                     'self.overlay.heightAnchor constraintLessThanOrEqualToConstant:88'):
+            self.assertIn(text, layout)
+        for text in ('MIPMAP — LEFT', 'LINEAR — RIGHT', 'Active texture profile:',
+                     'Mipmap capability:', 'Actual generation call: UNKNOWN',
+                     'Display FPS: unmeasured', 'App GL errors:', 'WARN+:', 'BLOCKED:', 'Clear fallback:'):
+            self.assertIn(text, overlay)
+        self.assertIn('!clearOnly && scene && scene->isTextured()', overlay)
+        self.assertIn('scene->mipmapCapabilitySupported && scene->mipmapEntryPointAvailable', overlay)
+        for status in ('NOT TESTED', 'AVAILABLE', 'UNAVAILABLE'):
+            self.assertIn('@"' + status + '"', overlay)
+        self.assertNotIn('Log(', overlay)
+        self.assertNotIn('new osg::', overlay)
+        tick = MAIN.split('- (void)tick:', 1)[1]
+        self.assertLess(tick.index('if (start - rateStart >= 1.0)'), tick.index('[self updateOverlay]'))
 
     def test_mipmap_startup_and_comparator_diagnostic_inventory(self):
         self.assertIn('unsigned textureProfile = 3;', SCENE)
