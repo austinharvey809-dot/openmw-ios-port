@@ -1,4 +1,5 @@
 #pragma once
+#include "Checkerboard.hpp"
 #include <osg/Depth>
 #include <osg/Geode>
 #include <osg/Geometry>
@@ -8,6 +9,9 @@
 #include <osg/Program>
 #include <osg/Shader>
 #include <osg/State>
+#include <osg/Image>
+#include <osg/Texture2D>
+#include <osg/Uniform>
 #include <osg/Version>
 #include <osgViewer/GraphicsWindow>
 #include <osgViewer/Viewer>
@@ -37,9 +41,13 @@ class OSGScene {
     osg::ref_ptr<osgViewer::Viewer> viewer;
     osg::ref_ptr<osg::MatrixTransform> model;
     osg::ref_ptr<osg::Program> program;
+    osg::ref_ptr<osg::Program> texturedProgram;
+    osg::ref_ptr<osg::StateSet> coloredState, texturedState;
     osg::ref_ptr<SceneLog> log;
     osg::ref_ptr<osg::NotifyHandler> previousLog;
     bool checkedProgram = false;
+    bool checkedTexturedProgram = false;
+    bool textured = true;
     int width = 0, height = 0;
 public:
     unsigned long long frames = 0;
@@ -72,6 +80,8 @@ public:
 
         osg::ref_ptr<osg::Vec3Array> vertices = new osg::Vec3Array;
         osg::ref_ptr<osg::Vec4Array> colors = new osg::Vec4Array;
+        osg::ref_ptr<osg::Vec2Array> uvs = new osg::Vec2Array;
+        const osg::Vec2 faceUVs[4] = {{0,0},{1,0},{1,1},{0,1}};
         osg::ref_ptr<osg::DrawElementsUShort> indices = new osg::DrawElementsUShort(GL_TRIANGLES);
         const osg::Vec3 corners[] = {{-1,-1,-1},{1,-1,-1},{1,1,-1},{-1,1,-1},
                                      {-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}};
@@ -80,11 +90,14 @@ public:
                                      {1,.8f,.1f,1},{.8f,.2f,1,1},{.1f,1,1,1}};
         for (unsigned face = 0; face < 6; ++face) {
             for (unsigned corner : faces[face]) { vertices->push_back(corners[corner]); colors->push_back(palette[face]); }
+            for (const auto& uv : faceUVs) uvs->push_back(uv);
             for (unsigned offset : {0u,1u,2u,0u,2u,3u}) indices->push_back(static_cast<GLushort>(face*4 + offset));
         }
         osg::ref_ptr<osg::Geometry> geometry = new osg::Geometry;
         geometry->setVertexArray(vertices.get());
         geometry->setColorArray(colors.get(), osg::Array::BIND_PER_VERTEX);
+        // Explicit generic slot, independent of OSG's conventional texcoord aliases.
+        geometry->setVertexAttribArray(6, uvs.get(), osg::Array::BIND_PER_VERTEX);
         geometry->addPrimitiveSet(indices.get());
         geometry->setUseDisplayList(false);
         geometry->setUseVertexBufferObjects(true);
@@ -110,14 +123,62 @@ void main() { result=color; }
 )"));
         program->addBindAttribLocation("osg_Vertex", 0);
         program->addBindAttribLocation("osg_Color", 3);
-        model->getOrCreateStateSet()->setAttributeAndModes(program.get(), osg::StateAttribute::ON);
-        model->getOrCreateStateSet()->setAttributeAndModes(new osg::Depth, osg::StateAttribute::ON);
-        model->getOrCreateStateSet()->setMode(GL_DEPTH_TEST, osg::StateAttribute::ON);
+        coloredState = new osg::StateSet;
+        coloredState->setAttributeAndModes(program.get(), osg::StateAttribute::ON);
+        texturedProgram = new osg::Program;
+        texturedProgram->addShader(new osg::Shader(osg::Shader::VERTEX, R"(#version 300 es
+precision highp float;
+in vec4 osg_Vertex;
+in vec2 checkerUV;
+uniform mat4 osg_ModelViewProjectionMatrix;
+out mediump vec2 uv;
+void main() { gl_Position=osg_ModelViewProjectionMatrix*osg_Vertex; uv=checkerUV; }
+)"));
+        texturedProgram->addShader(new osg::Shader(osg::Shader::FRAGMENT, R"(#version 300 es
+precision mediump float;
+in mediump vec2 uv;
+uniform sampler2D checkerTexture;
+out vec4 result;
+void main() { result=texture(checkerTexture, uv); }
+)"));
+        texturedProgram->addBindAttribLocation("osg_Vertex", 0);
+        texturedProgram->addBindAttribLocation("checkerUV", 6);
+        texturedState = new osg::StateSet;
+        texturedState->setAttributeAndModes(texturedProgram.get(), osg::StateAttribute::ON);
+        osg::ref_ptr<osg::Image> image = new osg::Image;
+        image->allocateImage(Checkerboard::Width, Checkerboard::Height, 1, GL_RGBA, GL_UNSIGNED_BYTE);
+        if (!image->data()) throw std::runtime_error("OSG checkerboard image allocation failed");
+        Checkerboard::fill(image->data());
+        osg::ref_ptr<osg::Texture2D> texture = new osg::Texture2D(image.get());
+        texture->setUnRefImageDataAfterApply(false);
+        texture->setFilter(osg::Texture::MIN_FILTER, osg::Texture::NEAREST);
+        texture->setFilter(osg::Texture::MAG_FILTER, osg::Texture::NEAREST);
+        texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
+        texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
+        texture->setLODBias(0.0f);
+        texture->setUseHardwareMipMapGeneration(false);
+        // StateSet retains Texture2D, which retains Image and its allocateImage storage.
+        // NEAREST minification requests only level zero; no mip chain is supplied.
+        texturedState->setTextureAttribute(0, texture.get(), osg::StateAttribute::ON);
+        texturedState->addUniform(new osg::Uniform("checkerTexture", 0));
+        for (auto* state : {coloredState.get(), texturedState.get()}) {
+            state->setAttributeAndModes(new osg::Depth, osg::StateAttribute::ON);
+            state->setMode(GL_DEPTH_TEST, osg::StateAttribute::ON);
+        }
+        model->setStateSet(texturedState.get());
+        log->write("OSG cube startup: textured; RGBA8 32x32, red v=0/u=0 corner, NEAREST, CLAMP_TO_EDGE, level zero, LOD bias zero");
         viewer->setSceneData(model.get());
         viewer->realize();
         log->write("Embedded OSG viewer realized; single thread, external EGL swap");
     }
     unsigned warnings() const { return log->warnings; }
+    bool isTextured() const { return textured; }
+    void setTextured(bool value) {
+        if (textured == value) return;
+        textured = value;
+        model->setStateSet(textured ? texturedState.get() : coloredState.get());
+        log->write(std::string("OSG cube mode: ") + (textured ? "textured" : "colored"));
+    }
     void frame(double time, int w, int h) {
         if (w != width || h != height) {
             width=w; height=h;
@@ -138,14 +199,16 @@ void main() { result=color; }
             window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_FRAME);
             log->write("OSG GL checking: ONCE_PER_FRAME restored after 5 OSG-rendered frames");
         }
-        if (!checkedProgram) {
-            auto* pcp = program->getPCP(*window->getState());
+        bool& checked = textured ? checkedTexturedProgram : checkedProgram;
+        osg::Program* activeProgram = textured ? texturedProgram.get() : program.get();
+        if (!checked) {
+            auto* pcp = activeProgram->getPCP(*window->getState());
             if (!pcp) throw std::runtime_error("OSG did not create a per-context shader program");
             std::string message;
             pcp->getInfoLog(message);
-            log->write("OSG program link log: " + message);
+            log->write(std::string("OSG program link log (") + (textured ? "textured" : "colored") + "): " + message);
             if (!pcp->isLinked()) throw std::runtime_error("OSG ESSL300 program failed to link: " + message);
-            checkedProgram = true;
+            checked = true;
         }
     }
     ~OSGScene() {

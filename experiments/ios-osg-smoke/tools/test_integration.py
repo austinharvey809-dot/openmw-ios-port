@@ -70,7 +70,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('GraphicsWindowEmbedded', scene)
         self.assertIn('Viewer::SingleThreaded', scene)
         self.assertIn('osg_ModelViewProjectionMatrix', scene)
-        self.assertEqual(scene.count('#version 300 es'), 2)
+        self.assertEqual(scene.count('#version 300 es'), 4)
         self.assertNotIn('glReadPixels', main + scene)
         self.assertIn('EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE', main)
         self.assertIn('EGL_DEPTH_SIZE, 24', main)

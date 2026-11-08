@@ -13,12 +13,124 @@ Build #8 then confirmed native compilation, callback registration, useful API-er
 messages and five-frame deregistration on the device. Two independent launches
 reported unsupported `GL_TEXTURE_LOD_BIAS` in `glTexParameterf`. This observed
 operation is identified. Original pinned source is now verified locally and the
-GLES3-only LOD-bias overlay below is implemented, awaiting native Build #9 validation.
+GLES3-only LOD-bias overlay below is implemented and physically validated in Build #9.
+That run rendered 759 OSG frames with 854 successful EGL swaps (approximately
+30.53 swaps per active second), nominal thermal state and no application/link
+failure. The prior first-frame LOD-bias error was absent in the new session.
+Five-frame diagnostic registration/restoration and foreground recovery worked;
+the expected missing-windowing-interface warning remains.
+
+**Build #10 status: implemented locally; native compilation and device testing
+pending.** It adds the explicit checkerboard Texture2D scene described next.
 
 The separate `ios-angle-smoke` app remains the user-confirmed physical-device
 baseline (workflow #12); its code and workflow are unchanged. The build #3-#5
 failure/fix sections below are historical records, superseded by the successful
 OSG device milestone where they describe compilation as pending.
+
+## Build #10: explicit checkerboard Texture2D
+
+The default scene is now a textured version of the same rotating, depth-tested
+24-vertex/36-index cube. The original colored shaders and six-face palette remain
+available as a regression baseline. No engine integration or asset loading is added.
+
+`src/Checkerboard.hpp` generates an original 32x32 RGBA fixture (4096 bytes):
+4x4 alternating dark `(32,32,32,255)` and light `(240,240,240,255)` cells, with
+the entire 4x4 cell at `(u,v)=(0,0)` replaced by red `(255,32,32,255)`.
+Row zero is the v=0 edge. Each face maps `(0,0),(1,0),(1,1),(0,1)` to its four
+existing vertices, so the marker identifies the first UV corner on every face.
+Face winding/orientation follows the existing cube's face order; do not expect
+the red corner to occupy the same screen position on differently oriented faces.
+
+`OSGScene` allocates an `osg::Image` once with `allocateImage(..., GL_RGBA,
+GL_UNSIGNED_BYTE)` and writes directly into its OSG-owned storage. A ref-counted
+Texture2D retains that Image (`setUnRefImageDataAfterApply(false)`); a retained
+textured StateSet owns the texture.
+There are no pointers into temporary pixel arrays or image-file plugins. OSG's
+first textured draw performs upload through its Texture2D traversal; no manual
+GL upload, readback or per-frame image/resource reconstruction is added. The
+colored and textured StateSets share the existing geometry and model transform.
+
+Texture unit 0 uses explicit NEAREST minification/magnification, CLAMP_TO_EDGE
+S/T, zero LOD bias and disabled hardware mip generation. The image supplies only
+level zero, and the non-mipmapped min filter does not request a mip chain or OSG's
+CPU mip-generation fallback. No osg::Sampler objects, filtering variants, sRGB,
+anisotropy or border settings are introduced. The separate GLES3 sampler-object
+CLAMP conversion concern remains deliberately unexercised and unmodified.
+
+The new ESSL 3.00 program binds position to attribute 0 and UVs to explicit generic
+attribute 6, supplied with `setVertexAttribArray(6, ..., BIND_PER_VERTEX)`.
+This public API also has existing repository usage in `groundcover.cpp`; the
+complete pinned Geometry/State headers are not cached locally, so the actual
+pinned implementation and its interaction with noncompact aliases must still
+pass the native build/device test. Conventional `osg_MultiTexCoord0` aliases are
+not guessed. UV varying precision matches explicitly between the two shaders.
+An integer `checkerTexture` uniform selects unit 0; the fragment shader outputs
+only `texture(checkerTexture, uv)`, without the cube's face-color tint.
+Attribute-only texture attachment avoids requesting a legacy GL_TEXTURE_2D enable.
+
+Each program has its own first-use link-check flag. After that mode's first OSG
+traversal, its actual per-context program link status and info log are checked and
+logged with `textured` or `colored` identification. Checking the startup textured
+program cannot mark the colored program checked. A failed link still stops with
+the existing failure diagnostics.
+
+Controls are edge-triggered as before:
+
+- Square/X toggles the selected cube between textured and colored. In clear-only
+  mode it changes the stored cube selection while leaving clear-only active.
+- Triangle/Y toggles clear-only; leaving it returns to the selected cube.
+- Controller priming/reconnection and pause/foreground behavior are unchanged.
+
+The overlay names the displayed cube mode, and `selected_cube` in the existing
+JSON export records the selection independently of `clear_only`. Mode transitions
+and startup configuration are written to the existing log. No touchscreen controls
+are added. The first active traversal starts textured so its initial upload occurs
+inside the unchanged five-frame State and KHR_debug diagnostic window. Switching
+modes does not restart that window; later colored linking remains independently
+checked. No EGL context changes, extra swaps or synchronization calls are added.
+
+### Build #10 validation and device procedure
+
+Run the existing host command below. `test_texture_scene.py` adds source-contract
+checks for storage/lifetime, UV count/bindings, shaders, texture configuration,
+independent linking and controller/startup behavior. An optional C++11 fixture
+executes the actual checkerboard generator, validates all 1024 pixels/alpha,
+checks the 16-pixel red marker and checks guard bytes. It skips explicitly when
+no compiler is installed; source checks alone do not execute C++ or validate GL.
+
+After manual review/commit, use the unchanged `[run-osg]` opt-in workflow and
+strict IPA validator. No workflow, packaging, overlay or dependency-pin change
+is needed. Install the new unsigned IPA using the existing Sideloadly procedure.
+For a fresh launch (not merely foregrounding an old scene), verify:
+
+1. Textured startup, visible alternating cells and red marker on each face,
+   undistorted face coverage, rotation and correct depth occlusion.
+2. A successful `textured` link check and no first-upload/sampling API errors in
+   raw OSG/KHR messages. Confirm both five-frame diagnostic transitions and no
+   callback loss. The known windowing-interface warning is expected; warning
+   counters alone are insufficient evidence of GL correctness.
+3. Square selects the original colored baseline and produces its independent
+   successful `colored` link check. Repeated switching retains texture content.
+4. Triangle enters/exits clear-only and restores the selected cube. Test Square
+   while clear-only, held buttons and controller disconnect/reconnect.
+5. Repeated Home Screen return and landscape resizing preserve the pattern,
+   selection, depth and external-context ownership without application failure.
+6. Export the new-session log/JSON, record traversal/swap counts, active swap rate,
+   CPU timing and thermal state. Compare a sustained nominal-thermal run with the
+   previous approximately 30 successful swaps/active second; actual display FPS
+   and GPU duration remain unmeasured.
+
+Mipmap generation, linear/repeat filtering and sampler objects require separate
+controlled follow-up builds. This fixture does not validate those paths, broader
+OpenMW material compatibility or long-duration battery/performance behavior.
+
+Local Build #10 validation: 89 OSG tests ran (85 passed, four compiler-dependent
+fixtures skipped), including 11 new texture regressions. ANGLE: 76 passed/one
+skip; Vulkan: 76 passed; Zink: 43 passed. Total: **280 passed, five skipped**.
+The pixel-execution fixture is among the skips on this Windows host. Native
+Apple compilation, shader linking, texture upload and visual behavior are untested
+for Build #10. No downloads, CI runs, commits or pushes were performed.
 
 ## Temporary first-five-frame GL diagnostics
 
@@ -561,7 +673,7 @@ the earlier bare triangle or these host tests.
 
 Basic native compilation, static linking, shader linking, VAO geometry, matrix
 upload, depth drawing and IPA installation are now established for this scene.
-Remaining uncertainties include native validation of the LOD-bias correction,
+Remaining uncertainties include native validation of Build #10's explicit texture,
 broader extension paths, repeated lifecycle/resize behavior and sustained thermal
 performance. The initial four exact source anchors plus three verified LOD anchors
 are the bounded adaptations; any further source adaptation requires compiler/runtime evidence

@@ -292,6 +292,8 @@ public:
     result[@"surface_pixels"] = renderer ? @[@(renderer->width), @(renderer->height)] : @[];
     result[@"thermal_state"] = @(NSProcessInfo.processInfo.thermalState);
     result[@"clear_only"] = @(clearOnly);
+    result[@"selected_cube"] = renderer && renderer->osgScene ?
+        (renderer->osgScene->isTextured() ? @"textured" : @"colored") : @"unavailable";
     NSData *build = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"angle-build" ofType:@"json"]];
     if (build) result[@"dependency"] = [NSJSONSerialization JSONObjectWithData:build options:0 error:nil] ?: @{};
     NSData *osgBuild = [NSData dataWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"osg-build" ofType:@"json"]];
@@ -304,8 +306,8 @@ public:
     self.overlay.text = [NSString stringWithFormat:
         @"OSG / ANGLE Metal / GLES3 — %@\nRequested callbacks: 30 Hz | display FPS: unmeasured\n"
         @"Successful EGL swaps: %llu | active rate: %.1f/s\nCPU callback mean: %.2f ms | interval mean: %.2f ms\n"
-        @"GL errors: %u | thermal: %@ | %dx%d pixels\nTriangle/Y: clear toggle | Square/X: OSG cube | %@\n%@%@",
-        clearOnly ? @"clear" : @"OSG cube", swaps, swapRate, cpuMs, callbackMs,
+        @"GL errors: %u | thermal: %@ | %dx%d pixels\nTriangle/Y: clear toggle | Square/X: texture/color | %@\n%@%@",
+        clearOnly ? @"clear" : (renderer && renderer->osgScene && renderer->osgScene->isTextured() ? @"textured cube" : @"colored cube"), swaps, swapRate, cpuMs, callbackMs,
         renderer ? renderer->errors : 0, @[@"nominal", @"fair", @"serious", @"critical"][NSProcessInfo.processInfo.thermalState],
         renderer ? renderer->width : 0, renderer ? renderer->height : 0,
         previousController ? @"controller connected" : @"controller absent", identity ?: @"",
@@ -354,7 +356,8 @@ public:
         previousController = controller; previousY = y; previousX = x; buttonsPrimed = true;
     } else {
         if (y && !previousY) clearOnly = !clearOnly;
-        if (x && !previousX) clearOnly = false;
+        if (x && !previousX && renderer && renderer->osgScene)
+            renderer->osgScene->setTextured(!renderer->osgScene->isTextured());
         previousY = y; previousX = x;
     }
     if (renderer && !renderer->sceneAvailable) clearOnly = true;
