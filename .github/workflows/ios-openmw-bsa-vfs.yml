@@ -1,0 +1,264 @@
+name: iOS OpenMW BSA-to-VFS native validation
+
+# Manual only. GitHub normally requires registration on the default branch;
+# once available, dispatch this workflow with ios-port selected. No push trigger.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPERIMENT: experiments/ios-openmw-bsa-vfs
+  BSA: experiments/ios-openmw-bsa
+  CORE: experiments/ios-openmw-core
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  host-validation:
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize failure evidence
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-bsa-vfs-host-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-bsa-vfs-host-build"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\n' "$EVIDENCE" "$BUILD_DIR" >> "$GITHUB_ENV"
+          printf 'Host job requested for %s at %s\n' "$GITHUB_REF" "$GITHUB_SHA" > "$EVIDENCE/run.txt"
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record source and existing toolchain
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            test "$GITHUB_REF" = refs/heads/ios-port
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            git rev-parse HEAD
+            git status --short
+            sw_vers
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk macosx --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-path
+            xcrun --sdk macosx clang++ --version
+            cmake --version
+            ctest --version
+            python3 --version
+            printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          git ls-files -z -- "$EXPERIMENT" "$BSA" "$CORE" .github/workflows/ios-openmw-bsa-vfs.yml \
+            components/bsa components/esm/fourcc.hpp components/files components/platform \
+            components/vfs components/misc/strings components/toutf8 components/debug/debuglog.* | xargs -0 shasum -a 256 > "$EVIDENCE/source-sha256.txt"
+          cp LICENSE "$EVIDENCE/OpenMW-LICENSE.txt"
+      - name: Run focused Python regressions
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            python3 -m unittest discover -s "$EXPERIMENT/tools" -p 'test_*.py' -v
+          } 2>&1 | tee "$EVIDENCE/python-tests.log"
+      - name: Configure macOS host fixture
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake -S "$EXPERIMENT" -B "$BUILD_DIR" -G Xcode \
+              -DOPENMW_IOS_BSA_VFS_HOST_TESTS=ON \
+              -DCMAKE_CXX_COMPILER="$(xcrun --sdk macosx --find clang++)"
+          } 2>&1 | tee "$EVIDENCE/configure.log"
+      - name: Compile and link actual OpenMW sources and execute six BSA/VFS cases
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake --build "$BUILD_DIR" --config Release --verbose --target openmw-bsa-vfs-check -- -jobs 3
+          } 2>&1 | tee "$EVIDENCE/build.log"
+          {
+            set -x
+            ctest --test-dir "$BUILD_DIR" -C Release --verbose --output-on-failure --no-tests=error \
+              -R '^openmw-bsa-vfs-runtime$'
+            grep -F 'Six synthetic BSA/VFS cases passed with unchanged input tree.' "$BUILD_DIR/Testing/Temporary/LastTest.log"
+          } 2>&1 | tee "$EVIDENCE/ctest.log"
+          echo 'Host BSA/VFS fixture passed six synthetic cases with unchanged input tree and no created archive. No iPhone or Engine execution claim.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve host diagnostics, synthetic inputs and checksums
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/cmake-diagnostics"
+          if test -d "$BUILD_DIR/synthetic-bsa-vfs"; then cp -R "$BUILD_DIR/synthetic-bsa-vfs" "$EVIDENCE/synthetic-bsa-vfs"; fi
+          printf 'Job status before upload: %s\n' '${{ job.status }}' > "$EVIDENCE/job-status.txt"
+          python3 - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          root, build = Path(os.environ['EVIDENCE']), Path(os.environ['BUILD_DIR'])
+          for path in sorted(build.rglob('*')):
+              if path.is_file() and path.name in {'CMakeCache.txt', 'CMakeConfigureLog.yaml', 'LastTest.log', 'LastTestsFailed.log'}:
+                  destination = root / 'cmake-diagnostics' / path.relative_to(build)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(path, destination)
+          inventory = {}
+          for name in ('libopenmw-ios-bsa-vfs.a', 'libopenmw-ios-bsa-reader.a', 'libopenmw-ios-data-core.a'):
+              paths = sorted(build.rglob(name))
+              inventory[name] = [str(p) for p in paths]
+              if len(paths) == 1:
+                  shutil.copy2(paths[0], root / ('host-' + name))
+          (root / 'host-archive-paths.json').write_text(json.dumps(inventory, indent=2) + '\n', encoding='utf-8')
+          rows = [hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(root).as_posix()
+                  for p in sorted(root.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS']
+          (root / 'SHA256SUMS').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-openmw-bsa-vfs-host-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-bsa-vfs-host-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  iphoneos-compilation:
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize failure evidence
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-bsa-vfs-device-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-bsa-vfs-device-build"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\n' "$EVIDENCE" "$BUILD_DIR" >> "$GITHUB_ENV"
+          printf 'Device job requested for %s at %s\n' "$GITHUB_REF" "$GITHUB_SHA" > "$EVIDENCE/run.txt"
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record source and existing toolchain
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            test "$GITHUB_REF" = refs/heads/ios-port
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+            git rev-parse HEAD
+            git status --short
+            sw_vers
+            xcode-select -p
+            xcodebuild -version
+            xcrun --sdk iphoneos --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-path
+            xcrun --sdk iphoneos clang++ --version
+            cmake --version
+            python3 --version
+            printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          git ls-files -z -- "$EXPERIMENT" "$BSA" "$CORE" .github/workflows/ios-openmw-bsa-vfs.yml \
+            components/bsa components/esm/fourcc.hpp components/files components/platform \
+            components/vfs components/misc/strings components/toutf8 components/debug/debuglog.* | xargs -0 shasum -a 256 > "$EVIDENCE/source-sha256.txt"
+          cp LICENSE "$EVIDENCE/OpenMW-LICENSE.txt"
+      - name: Configure iPhoneOS ARM64 static target
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake -S "$EXPERIMENT" -B "$BUILD_DIR" -G Xcode \
+              -DOPENMW_IOS_BSA_VFS_HOST_TESTS=OFF -DCMAKE_SYSTEM_NAME=iOS \
+              -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0
+          } 2>&1 | tee "$EVIDENCE/configure.log"
+      - name: Compile three BSA/VFS objects and unchanged B/A dependencies
+        id: compile
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            cmake --build "$BUILD_DIR" --config Release --verbose --target openmw-ios-bsa-vfs -- \
+              -jobs 3 CODE_SIGNING_ALLOWED=NO
+          } 2>&1 | tee "$EVIDENCE/build.log"
+      - name: Locate all three archives and preserve available outputs
+        id: archives
+        if: always()
+        env:
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee "$EVIDENCE/archive-location.log"
+          import json, os, shutil
+          from pathlib import Path
+          root, build = Path(os.environ['EVIDENCE']), Path(os.environ['BUILD_DIR'])
+          inventory, errors = {}, []
+          for name in ('libopenmw-ios-bsa-vfs.a', 'libopenmw-ios-bsa-reader.a', 'libopenmw-ios-data-core.a'):
+              paths = sorted(build.rglob(name))
+              inventory[name] = [str(p) for p in paths]
+              if len(paths) != 1 or not paths[0].is_file() or paths[0].stat().st_size == 0:
+                  errors.append('Expected exactly one nonempty build archive: ' + name)
+              else:
+                  shutil.copy2(paths[0], root / name)
+          (root / 'device-archive-paths.json').write_text(json.dumps(inventory, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(inventory, indent=2))
+          if errors:
+              print('\n'.join(errors))
+              if os.environ['COMPILE_OUTCOME'] == 'success':
+                  raise SystemExit(1)
+          PY
+      - name: Independently validate the three BSA/VFS device objects
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            python3 "$EXPERIMENT/tools/validate_vfs_archive.py" \
+              --archive "$EVIDENCE/libopenmw-ios-bsa-vfs.a" --evidence "$EVIDENCE/vfs-inspection"
+          } 2>&1 | tee "$EVIDENCE/vfs-validation.log"
+      - name: Independently validate the single BSA device object
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            python3 "$BSA/tools/validate_bsa_archive.py" \
+              --archive "$EVIDENCE/libopenmw-ios-bsa-reader.a" --evidence "$EVIDENCE/bsa-inspection"
+          } 2>&1 | tee "$EVIDENCE/bsa-validation.log"
+      - name: Independently validate the original five data-core device objects
+        if: ${{ !cancelled() && steps.compile.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            python3 "$CORE/tools/validate_archive.py" \
+              --archive "$EVIDENCE/libopenmw-ios-data-core.a" --evidence "$EVIDENCE/core-inspection"
+          } 2>&1 | tee "$EVIDENCE/core-validation.log"
+      - name: Preserve device diagnostics and checksums
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE/cmake-diagnostics"
+          printf 'Job status before upload: %s\n' '${{ job.status }}' > "$EVIDENCE/job-status.txt"
+          python3 - <<'PY'
+          import hashlib, os, shutil
+          from pathlib import Path
+          root, build = Path(os.environ['EVIDENCE']), Path(os.environ['BUILD_DIR'])
+          for path in sorted(build.rglob('*')):
+              if path.is_file() and path.name in {'CMakeCache.txt', 'CMakeConfigureLog.yaml', 'LastTest.log', 'LastTestsFailed.log'}:
+                  destination = root / 'cmake-diagnostics' / path.relative_to(build)
+                  destination.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(path, destination)
+          rows = [hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(root).as_posix()
+                  for p in sorted(root.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS']
+          (root / 'SHA256SUMS').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ios-openmw-bsa-vfs-device-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-bsa-vfs-device-evidence/
+          if-no-files-found: error
+          retention-days: 14
