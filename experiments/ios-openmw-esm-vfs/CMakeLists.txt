@@ -1,0 +1,42 @@
+cmake_minimum_required(VERSION 3.24)
+option(OPENMW_IOS_ESM_VFS_HOST_TESTS "Run genuine STAT-to-BSA/VFS integration on a native POSIX host" OFF)
+if(NOT OPENMW_IOS_ESM_VFS_HOST_TESTS)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "18.0" CACHE STRING "Minimum iOS version")
+endif()
+project(OpenMWIOSESMVFS LANGUAGES CXX)
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+find_package(Threads REQUIRED)
+
+# D owns its fifteen translation units and the verified genuine OSG math config.
+# Do NOT also link A/B/C: conversion, openfile, toutf8 and debuglog overlap D.
+set(OPENMW_IOS_ESM_HOST_TESTS "${OPENMW_IOS_ESM_VFS_HOST_TESTS}")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../ios-openmw-esm"
+    "${CMAKE_CURRENT_BINARY_DIR}/esm-reader" EXCLUDE_FROM_ALL)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/audit_sources.py"
+    --osg-source "${OPENMW_ESM_OSG_SOURCE}" --require-complete
+    RESULT_VARIABLE _audit_result OUTPUT_VARIABLE _audit_report ERROR_VARIABLE _audit_error)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/source-audit.log" "${_audit_report}${_audit_error}")
+if(NOT _audit_result STREQUAL "0")
+    message(FATAL_ERROR "ESM/VFS source integrity verification failed: ${_audit_report}${_audit_error}")
+endif()
+get_filename_component(OPENMW_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/data/source-audit.json" _manifest)
+string(JSON _count LENGTH "${_manifest}" additional_sources)
+math(EXPR _last "${_count} - 1")
+set(OPENMW_ESM_VFS_SOURCES)
+foreach(_i RANGE 0 ${_last})
+    string(JSON _path GET "${_manifest}" additional_sources ${_i})
+    list(APPEND OPENMW_ESM_VFS_SOURCES "${OPENMW_ROOT}/${_path}")
+endforeach()
+add_library(openmw-ios-esm-vfs STATIC ${OPENMW_ESM_VFS_SOURCES})
+target_include_directories(openmw-ios-esm-vfs PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../ios-openmw-bsa-vfs/src")
+target_link_libraries(openmw-ios-esm-vfs PUBLIC openmw-ios-esm-reader)
+target_compile_features(openmw-ios-esm-vfs PUBLIC cxx_std_20)
+set_target_properties(openmw-ios-esm-vfs PROPERTIES CXX_EXTENSIONS OFF)
+if(OPENMW_IOS_ESM_VFS_HOST_TESTS)
+    enable_testing()
+    add_executable(openmw-esm-vfs-check tests/esm_vfs_check.cpp)
+    target_link_libraries(openmw-esm-vfs-check PRIVATE openmw-ios-esm-vfs)
+    add_test(NAME openmw-esm-vfs-runtime COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/fixtures.py"
+        --reader "$<TARGET_FILE:openmw-esm-vfs-check>" --directory "${CMAKE_CURRENT_BINARY_DIR}/synthetic-esm-vfs")
+endif()
