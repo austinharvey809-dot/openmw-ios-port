@@ -71,7 +71,7 @@ NSDictionary *RunDataCheck(NSURL *fixtureDirectory, NSURL *buildMetadata)
     using namespace OpenMWIOSDataSmoke;
     NSMutableDictionary *result = [@{@"schema_version": @1, @"status": @"FAIL",
         @"session_id": NSUUID.UUID.UUIDString,
-        @"started_utc": [NSISO8601DateFormatter.new stringFromDate:NSDate.date],
+        @"started_utc": [[NSISO8601DateFormatter new] stringFromDate:[NSDate date]],
         @"genuine_openmw_call_completed": @NO, @"inputs_unchanged": NSNull.null,
         @"scope": @"Genuine OpenMW STAT-to-VFS data check; synthetic bytes; no NIF rendering or full engine"} mutableCopy];
     NSMutableArray *events = [NSMutableArray array];
@@ -142,6 +142,6 @@ NSDictionary *RunDataCheck(NSURL *fixtureDirectory, NSURL *buildMetadata)
         }
     }
     result[@"elapsed_ms"] = @((NSProcessInfo.processInfo.systemUptime - start) * 1000.0);
-    result[@"finished_utc"] = [NSISO8601DateFormatter.new stringFromDate:NSDate.date];
+    result[@"finished_utc"] = [[NSISO8601DateFormatter new] stringFromDate:[NSDate date]];
     return result;
 }
