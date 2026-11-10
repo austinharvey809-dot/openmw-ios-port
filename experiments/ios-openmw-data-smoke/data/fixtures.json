@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "inputs": {
+    "valid.esm": {
+      "size": 376,
+      "sha256": "48fdfa9d1aed2bb3d82169cd16574088373c4deaff3a39e9b40ea809157fcd9f"
+    },
+    "base.bsa": {
+      "size": 134,
+      "sha256": "3bb579dc79ac3aabbf12159298625d33e0a7a929a80a9550452fae7a47f632be"
+    }
+  },
+  "resource": {
+    "id": "eIOSStatic",
+    "model": "TeSt.NIF",
+    "key": "meshes/test.nif",
+    "size": 24,
+    "hex": "004f4d572d45ff0a0073796e7468657469632d6d6f64656c",
+    "sha256": "3f164502d39021fecd17102c940caad8e7916ede6863daca51200c44ff65a288"
+  }
+}
