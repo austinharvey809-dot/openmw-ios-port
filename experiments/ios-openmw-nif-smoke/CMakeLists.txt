@@ -27,10 +27,21 @@ set(OSG_USE_FLOAT_PLANE OFF CACHE BOOL "D math ABI" FORCE)
 set(OSG_USE_FLOAT_BOUNDINGSPHERE ON CACHE BOOL "D math ABI" FORCE)
 set(OSG_USE_FLOAT_BOUNDINGBOX ON CACHE BOOL "D math ABI" FORCE)
 set(OSG_USE_FLOAT_QUAT OFF CACHE BOOL "D math ABI" FORCE)
-add_subdirectory("${OPENMW_ESM_OSG_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/osg" EXCLUDE_FROM_ALL)
+set(_osg_binary_dir "${CMAKE_CURRENT_BINARY_DIR}/osg")
+add_subdirectory("${OPENMW_ESM_OSG_SOURCE}" "${_osg_binary_dir}" EXCLUDE_FROM_ALL)
 if(NOT TARGET osg OR NOT TARGET OpenThreads)
     message(FATAL_ERROR "Pinned OSG core/OpenThreads targets are required for NIF math linkage")
 endif()
+
+# Upstream configure_file calls create these before add_subdirectory returns.
+# OSG's directory-scoped includes do not propagate to this parent target.
+set(_osg_generated_include "${_osg_binary_dir}/include")
+foreach(_header IN ITEMS OpenThreads/Config OpenThreads/Version osg/Config osg/GL osg/Version)
+    if(NOT EXISTS "${_osg_generated_include}/${_header}"
+       OR IS_DIRECTORY "${_osg_generated_include}/${_header}")
+        message(FATAL_ERROR "Pinned OSG generated header missing: ${_osg_generated_include}/${_header}")
+    endif()
+endforeach()
 
 # Build the source that tools/prepare_bullet.py verified against OpenMW's own
 # Bullet 3.25 SHA-512 pin. CMake never downloads or substitutes a package.
@@ -87,6 +98,11 @@ add_library(openmw-ios-nif-parser STATIC ${_sources})
 target_include_directories(openmw-ios-nif-parser PRIVATE
     "${G0_BULLET_SOURCE}/src" "${OPENMW_ROOT}/extern/smhasher/include"
     "${OPENMW_ROOT}/extern/smhasher/include/smhasher")
+
+# Prefer the actual OSG build configuration over D/E's math-only osg/Config.
+# PUBLIC also supplies these headers to the genuine parser test executable.
+target_include_directories(openmw-ios-nif-parser BEFORE PUBLIC
+    "$<BUILD_INTERFACE:${_osg_generated_include}>")
 target_compile_definitions(openmw-ios-nif-parser PUBLIC BT_USE_DOUBLE_PRECISION)
 target_compile_features(openmw-ios-nif-parser PUBLIC cxx_std_20)
 target_link_libraries(openmw-ios-nif-parser PUBLIC openmw-ios-esm-vfs ${_bullet_libraries}

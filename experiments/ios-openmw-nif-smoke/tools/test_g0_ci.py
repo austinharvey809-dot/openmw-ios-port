@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
@@ -330,6 +331,59 @@ class SourceAndWorkflowContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RuntimeError, r"Genuine C\+\+ parser binary is unavailable"):
                 run_host_cases.run(Path(directory) / "missing-parser")
+
+
+class GeneratedOSGHeaderContracts(unittest.TestCase):
+    def setUp(self):
+        self.cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+
+    def test_generated_include_is_derived_from_the_osg_subdirectory_build(self):
+        self.assertIn('set(_osg_binary_dir "${CMAKE_CURRENT_BINARY_DIR}/osg")', self.cmake)
+        self.assertIn('add_subdirectory("${OPENMW_ESM_OSG_SOURCE}" "${_osg_binary_dir}" EXCLUDE_FROM_ALL)',
+                      self.cmake)
+        self.assertIn('set(_osg_generated_include "${_osg_binary_dir}/include")', self.cmake)
+        self.assertNotIn('set(_osg_generated_include "${OPENMW_ESM_OSG_SOURCE}', self.cmake)
+        self.assertNotIn("/Users/runner/", self.cmake)
+
+    def test_parser_and_consumer_receive_generated_headers_before_math_config(self):
+        includes = re.findall(r'target_include_directories\(openmw-ios-nif-parser\s+(.*?)\)',
+                              self.cmake, re.S)
+        generated = [entry for entry in includes if "_osg_generated_include" in entry]
+        self.assertEqual(len(generated), 1)
+        self.assertEqual(generated[0].split(),
+                         ["BEFORE", "PUBLIC", '"$<BUILD_INTERFACE:${_osg_generated_include}>"'])
+        self.assertIn('target_link_libraries(openmw-nif-parse-check PRIVATE openmw-ios-nif-parser)',
+                      self.cmake)
+        self.assertNotRegex(self.cmake, r'(?im)^\s*include_directories\(')
+
+    def test_all_required_generated_headers_are_guarded_after_osg_configuration(self):
+        guard = re.search(r'foreach\(_header IN ITEMS ([^)]+)\)(.*?)endforeach\(\)',
+                          self.cmake, re.S)
+        self.assertIsNotNone(guard)
+        self.assertEqual(guard.group(1).split(),
+                         ["OpenThreads/Config", "OpenThreads/Version", "osg/Config", "osg/GL", "osg/Version"])
+        self.assertIn('if(NOT EXISTS "${_osg_generated_include}/${_header}"', guard.group(2))
+        self.assertIn('OR IS_DIRECTORY "${_osg_generated_include}/${_header}")', guard.group(2))
+        self.assertIn('message(FATAL_ERROR "Pinned OSG generated header missing:', guard.group(2))
+        self.assertLess(self.cmake.index('add_subdirectory("${OPENMW_ESM_OSG_SOURCE}"'), guard.start())
+        self.assertLess(guard.end(), self.cmake.index('add_library(openmw-ios-nif-parser'))
+        # Only upstream configuration may produce headers: no local substitutes or copies.
+        self.assertNotRegex(self.cmake, r'(?i)\bconfigure_file\s*\(|\bfile\s*\(\s*(?:WRITE|COPY|GENERATE)\b')
+
+    def test_generated_header_fix_preserves_parser_and_dependency_contracts(self):
+        self.assertIn('set(_nif_units base controller data effect extra niffile nifstream node particle physics property texture)',
+                      self.cmake)
+        for contract in (prepare_bullet.URL, prepare_bullet.SHA512,
+                         'file(READ "${_bullet_provenance}" _bullet_json)',
+                         'OR NOT _bullet_source STREQUAL _bullet_real)',
+                         'set(USE_DOUBLE_PRECISION ON CACHE BOOL',
+                         'target_compile_definitions(openmw-ios-nif-parser PUBLIC BT_USE_DOUBLE_PRECISION)',
+                         'target_compile_features(openmw-ios-nif-parser PUBLIC cxx_std_20)',
+                         'target_link_libraries(openmw-ios-nif-parser PUBLIC openmw-ios-esm-vfs ${_bullet_libraries}',
+                         '    osg OpenThreads)',
+                         'add_test(NAME openmw-g0a-parser-candidates'):
+            self.assertIn(contract, self.cmake)
+        audit_g0.verify()
 
 
 class RuntimeFixtureContracts(unittest.TestCase):
