@@ -1,40 +1,40 @@
 {
   "files": {
     "invalid-header.bsa": {
-      "sha256": "20d27b747ea2c8b6c5e5891b39e312584a0785f6bbf8f9d39eea1333b3a693fd",
-      "size": 382
+      "sha256": "aa4b690a654334ab392417db891e67f93ca89dad975f636fbc9363ad86370c18",
+      "size": 440
     },
     "invalid-header.nif": {
-      "sha256": "ff4e2b49ee5baca0f8e1708d9cb9fcf2c538ff1d123833001e49f4186baeb42a",
-      "size": 334
+      "sha256": "772cba6c6370d6c0d0b23667026e3acb9de9c22f9f5a4fdc8b0dfee963b3a95b",
+      "size": 392
     },
     "invalid-reference.bsa": {
-      "sha256": "5085c50d4c260a30f813128a68d8595b2d8c178ce94717e9d3358c0f05add827",
-      "size": 382
+      "sha256": "aacba465160ee4c7e7bb5e20635a3bfb38df806bb9aa24601d0482085006e08a",
+      "size": 440
     },
     "invalid-reference.nif": {
-      "sha256": "994e93861282a759542207b5034e4ed1488271c27eb2a6bc5d7b45d8b0149c0c",
-      "size": 334
+      "sha256": "55c27c3592f14f69feb1a665488294e015e0b1c7e6cb296023886d213131e4bb",
+      "size": 392
     },
     "missing-resource.bsa": {
       "sha256": "ecc6ad80b0bda91fc90200161d92b2f8786d996ead4a7d0c087f9f9afccc798b",
       "size": 58
     },
     "triangle-candidate.bsa": {
-      "sha256": "47546cb468b4b86dd78b55d095105096fcd34543a6e2975eff0c729b3c202f1f",
-      "size": 382
+      "sha256": "72adc5667e62f146d4bfa770b568b29b3f519def6cce1784a49f67c632058ec3",
+      "size": 440
     },
     "triangle-candidate.nif": {
-      "sha256": "d1b9b0158fc3a1857a0f7ec5063c74171210e5bd8e11cf412214ca4350bdf6c4",
-      "size": 334
+      "sha256": "0b77632dd08be22a3df33be66939065e4d467fa1231b9a12459f844224f846ff",
+      "size": 392
     },
     "truncated.bsa": {
-      "sha256": "ca657139826f5b796d385b1509117ac95f28e3b6c523b97c2dde5198dd6456b6",
-      "size": 365
+      "sha256": "d48bc2bc014f99ff84ee12ae8ecc867f1ff05798b67524961c703cf7cbe590ed",
+      "size": 423
     },
     "truncated.nif": {
-      "sha256": "ca7e14793779778a3badbc01d160c7b46627595eec32d0a989758300738f5758",
-      "size": 317
+      "sha256": "66c8c54b1623a796f151c009a5c164da6f25250103a2e7aedc790bddd92fa63b",
+      "size": 375
     },
     "valid.esm": {
       "sha256": "48fdfa9d1aed2bb3d82169cd16574088373c4deaff3a39e9b40ea809157fcd9f",

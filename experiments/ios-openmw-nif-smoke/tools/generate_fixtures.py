@@ -25,17 +25,22 @@ def string(value):
     return le("I", len(value)) + value
 
 
+def mw_bool(value):
+    # NIFStream::read<bool> uses int32_t before version 4.1.0.0.
+    return le("i", int(value))
+
+
 def object_net(name):
     # NiObjectNET::read: name, extra-data ref, controller ref (4.0.0.2).
     return string(name) + le("ii", -1, -1)
 
 
 def av_object(name):
-    # NiAVObject::read: flags, T, quaternion (w,x,y,z), scale, velocity,
+    # NiAVObject::read: flags, T, Matrix3 (contiguous mValues[3][3]), scale, velocity,
     # property list, has-bounds. Newer-version collision ref is absent.
     return (object_net(name) + le("H", 0) + le("3f", 0, 0, 0)
-            + le("4f", 1, 0, 0, 0) + le("f", 1)
-            + le("3f", 0, 0, 0) + le("I", 0) + le("b", 0))
+            + le("9f", 1, 0, 0, 0, 1, 0, 0, 0, 1) + le("f", 1)
+            + le("3f", 0, 0, 0) + le("I", 0) + mw_bool(False))
 
 
 def record(kind, body):
@@ -45,10 +50,12 @@ def record(kind, body):
 def triangle_candidate():
     node = av_object("G0Root") + le("IiI", 1, 1, 0)  # child=record 1; no effects
     shape = av_object("G0Triangle") + le("ii", 2, -1)  # data=record 2; no skin
-    data = (le("H", 3) + le("b", 1)
+    data = (le("H", 3) + mw_bool(True)
             + le("9f", 0, 0, 0, 1, 0, 0, 0, 1, 0)
-            + le("b", 0) + le("4f", 0, 0, 0, 1)
-            + le("b", 0) + le("H", 0) + le("b", 0)
+            + mw_bool(False) + le("4f", 0, 0, 0, 1)
+            + mw_bool(False) + le("H", 0) + mw_bool(False)
+            # uint16 triangle count, uint32 index count, uint16 indices/match count.
+            # 4.0.0.2 has no additional triangle-presence Boolean.
             + le("HI3HH", 1, 3, 0, 1, 2, 0))
     return (b"NetImmerse File Format, Version 4.0.0.2\n"
             + le("II", 0x04000002, 3)

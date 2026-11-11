@@ -1,6 +1,7 @@
 # Milestone G0 initial investigation (historical)
 
-Current G0B host CI preparation is in [`G0B-review.md`](G0B-review.md). G0A
+Current G0B Build #6 fixture correction is in [`G0B-build6-review.md`](G0B-build6-review.md).
+The initial G0B host CI preparation is in [`G0B-review.md`](G0B-review.md). G0A
 candidate fixtures and the private game-asset inventory are in
 [`G0A-readiness.md`](G0A-readiness.md). This document records the earlier audit
 before those isolated files existed.

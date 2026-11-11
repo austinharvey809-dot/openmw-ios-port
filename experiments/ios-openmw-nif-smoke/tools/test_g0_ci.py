@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import tarfile
 import tempfile
@@ -13,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 import audit_g0
+import generate_fixtures
 import prepare_bullet
 import run_host_cases
 import validate_build
@@ -384,6 +386,116 @@ class GeneratedOSGHeaderContracts(unittest.TestCase):
                          'add_test(NAME openmw-g0a-parser-candidates'):
             self.assertIn(contract, self.cmake)
         audit_g0.verify()
+
+
+class FixtureLayoutContracts(unittest.TestCase):
+    """Independent byte/offset contracts; these do not prove parser acceptance."""
+
+    def setUp(self):
+        self.candidate = generate_fixtures.triangle_candidate()
+
+    def test_header_record_boundaries_and_object_net_fields(self):
+        data = self.candidate
+        self.assertEqual(len(data), 392)
+        self.assertEqual(data[:40], b"NetImmerse File Format, Version 4.0.0.2\n")
+        self.assertEqual(struct.unpack_from("<II", data, 40), (0x04000002, 3))
+        for start, name in ((48, b"NiNode"), (162, b"NiTriShape"), (280, b"NiTriShapeData")):
+            with self.subTest(record=name):
+                self.assertEqual(struct.unpack_from("<I", data, start), (len(name),))
+                self.assertEqual(data[start + 4:start + 4 + len(name)], name)
+        for start, name in ((58, b"G0Root"), (176, b"G0Triangle")):
+            with self.subTest(object=name):
+                self.assertEqual(struct.unpack_from("<I", data, start), (len(name),))
+                self.assertEqual(data[start + 4:start + 4 + len(name)], name)
+                self.assertEqual(struct.unpack_from("<ii", data, start + 4 + len(name)), (-1, -1))
+
+    def test_av_object_matrix_layout_and_transform_boundaries(self):
+        data = self.candidate
+        identity = (1., 0., 0., 0., 1., 0., 0., 0., 1.)
+        self.assertEqual(len(generate_fixtures.av_object("G0Root")), 92)
+        self.assertEqual(len(generate_fixtures.av_object("G0Triangle")), 96)
+        for flags, translation, rotation, scale, velocity, properties in (
+                (76, 78, 90, 126, 130, 142), (198, 200, 212, 248, 252, 264)):
+            with self.subTest(rotation=rotation):
+                self.assertEqual(struct.unpack_from("<H", data, flags), (0,))
+                self.assertEqual(struct.unpack_from("<3f", data, translation), (0., 0., 0.))
+                self.assertEqual(struct.unpack_from("<9f", data, rotation), identity)
+                self.assertEqual(scale - rotation, 36)
+                self.assertEqual(struct.unpack_from("<f", data, scale), (1.,))
+                self.assertEqual(struct.unpack_from("<3f", data, velocity), (0., 0., 0.))
+                self.assertEqual(struct.unpack_from("<I", data, properties), (0,))
+
+    def test_all_six_old_version_booleans_are_int32(self):
+        self.assertEqual(generate_fixtures.mw_bool(False), b"\0\0\0\0")
+        self.assertEqual(generate_fixtures.mw_bool(True), b"\1\0\0\0")
+        # Bounds on node/shape, vertices, normals, colors, UV presence.
+        for offset, value in ((146, 0), (268, 0), (300, 1), (340, 0), (360, 0), (366, 0)):
+            with self.subTest(offset=offset):
+                self.assertEqual(self.candidate[offset:offset + 4], struct.pack("<i", value))
+        # Flags and counts remain uint16; they are not Boolean fields.
+        self.assertEqual(struct.unpack_from("<H", self.candidate, 364), (0,))
+
+    def test_declared_references_and_root_list(self):
+        self.assertEqual(struct.unpack_from("<IiI", self.candidate, 150), (1, 1, 0))
+        self.assertEqual(struct.unpack_from("<ii", self.candidate, 272), (2, -1))
+        self.assertEqual(struct.unpack_from("<Ii", self.candidate, 384), (1, 0))
+        self.assertEqual(len(self.candidate[384:]), 8)
+
+    def test_geometry_payload_sizes_and_indices(self):
+        data = self.candidate
+        self.assertEqual(struct.unpack_from("<H", data, 298), (3,))
+        self.assertEqual(len(data[304:340]), 3 * 3 * 4)
+        self.assertEqual(struct.unpack_from("<9f", data, 304), (0., 0., 0., 1., 0., 0., 0., 1., 0.))
+        self.assertEqual(struct.unpack_from("<4f", data, 344), (0., 0., 0., 1.))
+        self.assertEqual(struct.unpack_from("<HI", data, 370), (1, 3))
+        self.assertEqual(struct.unpack_from("<3H", data, 376), (0, 1, 2))
+        self.assertEqual(len(data[376:382]), 3 * 2)
+        self.assertEqual(struct.unpack_from("<H", data, 382), (0,))
+
+    def test_bsa_resources_match_each_nif_exactly(self):
+        files = generate_fixtures.fixture_bytes()
+        for stem in ("triangle-candidate", "invalid-header", "truncated", "invalid-reference"):
+            with self.subTest(stem=stem):
+                archive, nif = files[stem + ".bsa"], files[stem + ".nif"]
+                self.assertEqual(struct.unpack_from("<III", archive), (0x100, 28, 1))
+                self.assertEqual(struct.unpack_from("<III", archive, 12), (len(nif), 0, 0))
+                self.assertEqual(archive[24:40], b"Meshes\\Test.NIF\0")
+                self.assertEqual(archive[48:], nif)
+        missing = files["missing-resource.bsa"]
+        self.assertEqual(missing[24:38], b"Docs\\Only.txt\0")
+        self.assertNotIn(b"Meshes\\Test.NIF", missing)
+
+    def test_negative_fixtures_remain_deliberately_invalid(self):
+        files = generate_fixtures.fixture_bytes()
+        self.assertEqual(files["invalid-header.nif"], b"X" + self.candidate[1:])
+        self.assertEqual(files["truncated.nif"], self.candidate[:-17])
+        with self.assertRaises(struct.error):
+            struct.unpack_from("<I", files["truncated.nif"], 372)
+        invalid = bytearray(self.candidate)
+        struct.pack_into("<i", invalid, 272, 99)  # Outside the three declared records.
+        self.assertEqual(files["invalid-reference.nif"], bytes(invalid))
+        self.assertNotEqual(files["invalid-header.nif"], files["triangle-candidate.nif"])
+
+    def test_manifest_and_regeneration_are_deterministic_and_strict(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "data"
+            with patch.object(generate_fixtures, "DATA", output), patch("sys.stdout", new_callable=io.StringIO):
+                generate_fixtures.generate()
+                before = {p.name: p.read_bytes() for p in output.iterdir()}
+                generate_fixtures.generate()
+                self.assertEqual({p.name: p.read_bytes() for p in output.iterdir()}, before)
+                manifest = json.loads(before["fixture-manifest.json"])
+                expected = generate_fixtures.fixture_bytes()
+                self.assertEqual(set(before), set(expected) | {"fixture-manifest.json"})
+                self.assertEqual(manifest["status"], "candidate-unvalidated-by-openmw-parser")
+                self.assertEqual(manifest["files"], {
+                    name: {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                    for name, data in expected.items()})
+                self.assertEqual(before["fixture-manifest.json"].decode("utf-8"),
+                                 (ROOT / "data/fixture-manifest.json").read_text(encoding="utf-8"))
+                (output / "unexpected.json").write_text("{}", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Unexpected file"):
+                    generate_fixtures.generate()
 
 
 class RuntimeFixtureContracts(unittest.TestCase):
