@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -11,6 +13,7 @@ from unittest.mock import patch
 
 import audit_g0
 import prepare_bullet
+import run_host_cases
 import validate_build
 
 
@@ -277,6 +280,175 @@ class SourceAndWorkflowContracts(unittest.TestCase):
             write_commands(build, files, missing_precision=(2,))
             with self.assertRaisesRegex(ValueError, "Double-precision macro"):
                 validate_build.audit(build, bullet)
+
+    def test_cmake_policy_override_preserves_workflow_gates(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(text.split("on:\n", 1)[1].split("\npermissions:", 1)[0].strip(),
+                         "workflow_dispatch:")
+        steps = text.split("      - name: ")[1:]
+        gates = [next(step for step in steps if "        id: " + gate + "\n" in step)
+                 for gate in ("source_gate", "bullet_gate", "configure_gate", "build_gate", "parser_gate")]
+        self.assertEqual([steps.index(step) for step in gates], sorted(steps.index(step) for step in gates))
+        for step in gates:
+            self.assertIn("set -euo pipefail", step)
+            self.assertNotIn("        if:", step)
+            self.assertNotIn("||", step)
+        self.assertNotIn("continue-on-error:", text)
+        configure = gates[2].replace("\\\n", " ")
+        command = configure.split("          cmake ", 1)[1].split("2>&1", 1)[0]
+        self.assertEqual(command.count("-DCMAKE_POLICY_VERSION_MINIMUM=3.5"), 1)
+        for argument in ('-DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE"',
+                         '-DG0_BULLET_SOURCE="$BULLET_ROOT/source"',
+                         '-DCMAKE_CXX_COMPILER="$(xcrun --sdk macosx --find clang++)"',
+                         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'):
+            self.assertIn(argument, command)
+        for check in ("audit_sources.py", "ci_checks.py", "audit_g0.py", "test_g0_ci.py"):
+            self.assertIn(check, gates[0])
+        self.assertIn('prepare_bullet.py" --download', gates[1])
+        self.assertIn("validate_build.py", gates[2])
+        self.assertIn('cmake --build "$BUILD_DIR" --target openmw-nif-parse-check', gates[3])
+        self.assertIn("ctest --test-dir", gates[4])
+        self.assertIn("-R '^openmw-g0a-parser-candidates$'", gates[4])
+        diagnostics = next(step for step in steps if "Preserve diagnostics," in step)
+        self.assertIn("        if: always()", diagnostics)
+        self.assertIn("PARSER_GATE: ${{ steps.parser_gate.outcome }}", diagnostics)
+        self.assertIn("('genuine_parser_runtime', 'PARSER_GATE')", diagnostics)
+        self.assertIn("CMakeConfigureLog.yaml", diagnostics)
+        self.assertIn('tee "$EVIDENCE/configure.log"', gates[2])
+        self.assertIn("        if: always()", steps[-1])
+        self.assertIn("uses: actions/upload-artifact@", steps[-1])
+        cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        for contract in (prepare_bullet.URL, prepare_bullet.SHA512,
+                         'add_subdirectory("${G0_BULLET_SOURCE}"',
+                         'set(USE_DOUBLE_PRECISION ON CACHE BOOL',
+                         'set(BUILD_SHARED_LIBS OFF CACHE BOOL',
+                         'add_test(NAME openmw-g0a-parser-candidates',
+                         '--reader "$<TARGET_FILE:openmw-nif-parse-check>"'):
+            self.assertIn(contract, cmake)
+
+    def test_runtime_rejects_an_unavailable_parser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, r"Genuine C\+\+ parser binary is unavailable"):
+                run_host_cases.run(Path(directory) / "missing-parser")
+
+
+class RuntimeFixtureContracts(unittest.TestCase):
+    """Harness regressions with mocked processes, never genuine parser evidence."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.data = root / "data"
+        shutil.copytree(ROOT / "data", self.data)
+        self.reader = root / "mock-parser"
+        self.reader.touch()
+        data_patch = patch.object(run_host_cases, "DATA", self.data)
+        data_patch.start()
+        self.addCleanup(data_patch.stop)
+
+    def invoke(self, process):
+        with patch.object(run_host_cases.subprocess, "run", side_effect=process) as mocked, \
+                patch("sys.stdout", new_callable=io.StringIO):
+            run_host_cases.run(self.reader)
+        return mocked
+
+    @staticmethod
+    def parser_result(command, **kwargs):
+        mode = command[1]
+        if mode == "positive" and Path(command[-1]).name == "invalid-header.nif":
+            return subprocess.CompletedProcess(command, 1, "", "FAIL: VFS NIF bytes differ")
+        marker = {"positive": "PASS genuine OpenMW NIF parse",
+                  "missing": "PASS missing resource rejected"}.get(
+                      mode, "PASS genuine parser rejected " + mode)
+        return subprocess.CompletedProcess(command, 0, marker, "")
+
+    def assert_rejected_before_parser(self, message):
+        with patch.object(run_host_cases.subprocess, "run") as mocked:
+            with self.assertRaisesRegex(RuntimeError, message):
+                run_host_cases.run(self.reader)
+            mocked.assert_not_called()
+
+    def test_reviewed_inventory_reaches_all_six_parser_invocations(self):
+        before = run_host_cases.snapshot()
+        self.assertEqual(len(before), 12)
+        self.assertIn("nif-source-sha256.json", before)
+        mocked = self.invoke(self.parser_result)
+        commands = [call.args[0] for call in mocked.call_args_list]
+        self.assertEqual([command[1] for command in commands],
+                         ["positive", "invalid", "truncated", "invalid-reference", "missing", "positive"])
+        self.assertEqual(Path(commands[-1][-1]).name, "invalid-header.nif")
+        self.assertEqual(run_host_cases.snapshot(), before)
+
+    def test_missing_source_manifest_is_rejected(self):
+        (self.data / "nif-source-sha256.json").unlink()
+        self.assert_rejected_before_parser("Fixture inventory mismatch")
+
+    def test_missing_fixture_is_rejected(self):
+        (self.data / "triangle-candidate.nif").unlink()
+        self.assert_rejected_before_parser("Fixture inventory mismatch")
+
+    def test_unexpected_files_including_other_json_are_rejected(self):
+        for name in ("unexpected.nif", "unexpected.json"):
+            with self.subTest(name=name):
+                extra = self.data / name
+                extra.write_bytes(b"unexpected")
+                self.assert_rejected_before_parser("Fixture inventory mismatch")
+                extra.unlink()
+
+    def test_directory_in_place_of_source_manifest_is_rejected(self):
+        path = self.data / "nif-source-sha256.json"
+        path.unlink()
+        path.mkdir()
+        self.assert_rejected_before_parser("Unsafe fixture entry")
+
+    def test_fixture_hash_and_size_are_still_required(self):
+        path = self.data / "triangle-candidate.nif"
+        original = path.read_bytes()
+        for replacement in (bytes([original[0] ^ 1]) + original[1:], original[:-1]):
+            with self.subTest(size=len(replacement)):
+                path.write_bytes(replacement)
+                self.assert_rejected_before_parser("Fixture SHA-256/size mismatch")
+
+    def test_source_manifest_remains_in_input_mutation_checks(self):
+        def mutate(command, **kwargs):
+            path = self.data / "nif-source-sha256.json"
+            path.write_bytes(path.read_bytes() + b"\n")
+            return self.parser_result(command, **kwargs)
+
+        with self.assertRaisesRegex(RuntimeError, "parser changed input files"):
+            self.invoke(mutate)
+
+    def test_each_parser_case_requires_zero_exit_and_expected_marker(self):
+        for mode in ("positive", "invalid", "truncated", "invalid-reference", "missing"):
+            for failure in ("exit", "marker"):
+                with self.subTest(mode=mode, failure=failure):
+                    def fail(command, **kwargs):
+                        result = self.parser_result(command, **kwargs)
+                        if command[1] == mode:
+                            if failure == "exit":
+                                result.returncode = 1
+                            else:
+                                result.stdout = "VFS lookup succeeded"
+                        return result
+
+                    with self.assertRaisesRegex(RuntimeError, "Genuine parser case failed: " + mode):
+                        self.invoke(fail)
+
+    def test_wrong_resource_bytes_require_failure_and_diagnostic(self):
+        for failure in ("exit", "diagnostic"):
+            with self.subTest(failure=failure):
+                def fail(command, **kwargs):
+                    result = self.parser_result(command, **kwargs)
+                    if command[1] == "positive" and Path(command[-1]).name == "invalid-header.nif":
+                        if failure == "exit":
+                            result.returncode = 0
+                        else:
+                            result.stderr = "FAIL: unrelated error"
+                    return result
+
+                with self.assertRaisesRegex(RuntimeError, "Incorrect resource hash/bytes were not rejected"):
+                    self.invoke(fail)
 
 
 class BuildPathContracts(unittest.TestCase):

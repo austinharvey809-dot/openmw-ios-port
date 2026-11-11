@@ -96,6 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S "$OPENMW_SOURCE/$EXPERIMENT" -B "$BUILD_DIR" -G 'Unix Makefiles' \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
             -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" \
             -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
             -DCMAKE_CXX_COMPILER="$(xcrun --sdk macosx --find clang++)" \

@@ -34,7 +34,7 @@ def run(reader):
     if manifest["status"] != "candidate-unvalidated-by-openmw-parser":
         raise RuntimeError("Unexpected fixture status")
     before = snapshot()
-    if set(before) != set(manifest["files"]) | {"fixture-manifest.json"}:
+    if set(before) != set(manifest["files"]) | {"fixture-manifest.json", "nif-source-sha256.json"}:
         raise RuntimeError("Fixture inventory mismatch")
     for name, entry in manifest["files"].items():
         if entry != {"size": (DATA / name).stat().st_size, "sha256": before[name]}:
