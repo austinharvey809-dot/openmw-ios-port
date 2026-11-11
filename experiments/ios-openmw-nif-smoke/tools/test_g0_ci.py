@@ -1,5 +1,7 @@
 """Offline contracts for the G0B acquisition and manual host workflow."""
 
+import hashlib
+import io
 import json
 from pathlib import Path
 import tarfile
@@ -43,12 +45,40 @@ def write_commands(build, files, missing_precision=()):
     (build / "compile_commands.json").write_text(json.dumps(commands), encoding="utf-8")
 
 
+class FakeResponse(io.BytesIO):
+    def __init__(self, data, content_length=None):
+        super().__init__(data)
+        self.headers = {} if content_length is None else {"Content-Length": str(content_length)}
+        self.read_sizes = []
+
+    def read(self, size=-1):
+        self.read_sizes.append(size)
+        return super().read(size)
+
+
+def tiny_bullet_archive(path, unsafe=False):
+    with tarfile.open(path, "w:gz") as archive:
+        for name, data in (("CMakeLists.txt", b"cmake_minimum_required(VERSION 3.16)\n"),
+                           ("LICENSE.txt", b"synthetic test license\n")):
+            member = tarfile.TarInfo("bullet3-3.25/" + name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+        if unsafe:
+            member = tarfile.TarInfo("bullet3-3.25/escape")
+            member.type = tarfile.SYMTYPE
+            member.linkname = "../../escape"
+            archive.addfile(member)
+
+
 class BulletAcquisitionContracts(unittest.TestCase):
     def test_exact_upstream_pin_is_still_in_openmw(self):
         prepare_bullet.verify_upstream_pin()
         self.assertEqual(prepare_bullet.URL,
                          "https://github.com/bulletphysics/bullet3/archive/refs/tags/3.25.tar.gz")
         self.assertEqual(len(prepare_bullet.SHA512), 128)
+        self.assertEqual(prepare_bullet.SHA512,
+                         "7086e5fcf69635801bb311261173cb8d173b712ca1bd78be03df48fad884674"
+                         "e85512861190e45a1a62d5627aaad65cde08c175c44a3be9afa410d3dfd5358d4")
 
     def test_checksum_mismatch_stops_before_archive_inspection(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -76,6 +106,143 @@ class BulletAcquisitionContracts(unittest.TestCase):
             prepare_bullet.inspect_members(clean + [member("bullet3-3.25/license.TXT")])
         with self.assertRaisesRegex(ValueError, "license"):
             prepare_bullet.inspect_members(clean[:2])
+
+
+class BulletDownloadContracts(unittest.TestCase):
+    def test_sparse_archive_between_old_and_new_limits_passes_size_gate(self):
+        self.assertEqual(prepare_bullet.MAX_ARCHIVE, 192 * 1024 * 1024)
+        self.assertEqual(prepare_bullet.MAX_EXPANDED, 1024 * 1024 * 1024)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.tar.gz"
+            with path.open("wb") as target:
+                target.seek(101 * 1024 * 1024 - 1)
+                target.write(b"\0")
+            # Only the size gate is under test; the sparse file is not Bullet.
+            with patch.object(prepare_bullet, "digest", return_value=prepare_bullet.SHA512):
+                self.assertEqual(prepare_bullet.verify_archive(path), prepare_bullet.SHA512)
+
+    def test_sparse_archive_above_new_limit_is_rejected_before_hashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "too-large.tar.gz"
+            with path.open("wb") as target:
+                target.seek(prepare_bullet.MAX_ARCHIVE)
+                target.write(b"\0")
+            with patch.object(prepare_bullet, "digest") as digest:
+                with self.assertRaisesRegex(ValueError, "too large"):
+                    prepare_bullet.verify_archive(path)
+                digest.assert_not_called()
+
+    def test_excessive_content_length_rejected_without_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            response = FakeResponse(b"unused", prepare_bullet.MAX_ARCHIVE + 1)
+            with patch.object(prepare_bullet.urllib.request, "urlopen", return_value=response):
+                with self.assertRaisesRegex(ValueError, "Content-Length exceeds limit"):
+                    prepare_bullet.acquire(root / "output", root / "evidence", download=True)
+            diagnostic = json.loads((root / "evidence/bullet-acquisition-error.json").read_text())
+            self.assertEqual(diagnostic["compressed_archive_limit_bytes"], prepare_bullet.MAX_ARCHIVE)
+            self.assertTrue(diagnostic["http_content_length_provided"])
+            self.assertEqual(diagnostic["http_content_length_bytes"], prepare_bullet.MAX_ARCHIVE + 1)
+            self.assertEqual(diagnostic["bytes_downloaded"], 0)
+            self.assertFalse(diagnostic["transfer_completed"])
+            self.assertFalse(diagnostic["sha512_verification_attempted"])
+            self.assertFalse((root / "output/bullet-3.25.tar.gz").exists())
+            self.assertFalse((root / "output/source").exists())
+
+    def test_missing_content_length_still_streams_with_a_bound(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            response = FakeResponse(b"0123456789")
+            with patch.object(prepare_bullet, "MAX_ARCHIVE", 8), \
+                    patch.object(prepare_bullet.urllib.request, "urlopen", return_value=response):
+                with self.assertRaisesRegex(ValueError, "download exceeds limit"):
+                    prepare_bullet.acquire(root / "output", root / "evidence", download=True)
+            diagnostic = json.loads((root / "evidence/bullet-acquisition-error.json").read_text())
+            self.assertEqual(diagnostic["compressed_archive_limit_bytes"], 8)
+            self.assertFalse(diagnostic["http_content_length_provided"])
+            self.assertIsNone(diagnostic["http_content_length_bytes"])
+            self.assertEqual(diagnostic["bytes_downloaded"], 9)
+            self.assertEqual(response.read_sizes, [8, 1])
+            self.assertFalse(diagnostic["transfer_completed"])
+            self.assertFalse(diagnostic["sha512_verification_attempted"])
+            self.assertFalse((root / "output/bullet-3.25.tar.gz").exists())
+            self.assertFalse((root / "output/source").exists())
+
+    def test_incomplete_declared_transfer_does_not_attempt_hashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            response = FakeResponse(b"short", 10)
+            with patch.object(prepare_bullet.urllib.request, "urlopen", return_value=response), \
+                    patch.object(prepare_bullet, "digest") as digest:
+                with self.assertRaisesRegex(ValueError, "length differs"):
+                    prepare_bullet.acquire(root / "output", root / "evidence", download=True)
+                digest.assert_not_called()
+            diagnostic = json.loads((root / "evidence/bullet-acquisition-error.json").read_text())
+            self.assertEqual(diagnostic["bytes_downloaded"], 5)
+            self.assertEqual(diagnostic["http_content_length_bytes"], 10)
+            self.assertFalse(diagnostic["transfer_completed"])
+            self.assertNotIn("actual_sha512", diagnostic)
+            self.assertFalse((root / "output/bullet-3.25.tar.gz").exists())
+
+    def test_complete_transfer_with_bad_hash_never_reaches_extraction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = b"complete but not the pinned Bullet source"
+            response = FakeResponse(data, len(data))
+            with patch.object(prepare_bullet.urllib.request, "urlopen", return_value=response), \
+                    patch.object(prepare_bullet.tarfile, "open") as tar_open:
+                with self.assertRaisesRegex(ValueError, "SHA-512 mismatch"):
+                    prepare_bullet.acquire(root / "output", root / "evidence", download=True)
+                tar_open.assert_not_called()
+            diagnostic = json.loads((root / "evidence/bullet-acquisition-error.json").read_text())
+            self.assertEqual(diagnostic["bytes_downloaded"], len(data))
+            self.assertTrue(diagnostic["transfer_completed"])
+            self.assertTrue(diagnostic["sha512_verification_attempted"])
+            self.assertEqual(diagnostic["actual_sha512"], hashlib.sha512(data).hexdigest())
+            self.assertFalse(diagnostic["archive_verified"])
+            self.assertFalse((root / "output/source").exists())
+            self.assertFalse((root / "evidence/bullet-provenance.json").exists())
+
+    def test_unsafe_member_rejected_before_extraction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "unsafe.tar.gz"
+            tiny_bullet_archive(archive, unsafe=True)
+            # The tiny fixture is not the pinned archive; exercise the member gate in isolation.
+            with patch.object(prepare_bullet, "verify_archive", return_value=prepare_bullet.SHA512):
+                with self.assertRaisesRegex(ValueError, "Unsafe Bullet archive member"):
+                    prepare_bullet.extract_verified(archive, root / "source")
+            self.assertFalse((root / "source").exists())
+
+    def test_license_and_provenance_preserved_after_verified_extraction(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "synthetic.tar.gz"
+            tiny_bullet_archive(archive)
+            # Mock only checksum verification: the extraction and evidence paths remain real.
+            with patch.object(prepare_bullet, "verify_archive", return_value=prepare_bullet.SHA512):
+                report = prepare_bullet.acquire(root / "output", root / "evidence", archive=archive)
+            license_data = (root / "evidence/bullet-license-0.txt").read_bytes()
+            self.assertEqual(license_data, b"synthetic test license\n")
+            self.assertEqual(report["license_evidence_sha256"]["bullet-license-0.txt"],
+                             hashlib.sha256(license_data).hexdigest())
+            self.assertEqual(report["source_url"], prepare_bullet.URL)
+            self.assertEqual(report["archive_sha512"], prepare_bullet.SHA512)
+            self.assertEqual(json.loads((root / "evidence/bullet-provenance.json").read_text()), report)
+            self.assertEqual(json.loads((root / "output/bullet-provenance.json").read_text()), report)
+
+    def test_network_failure_writes_diagnostic_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(prepare_bullet.urllib.request, "urlopen", side_effect=OSError("offline test")):
+                with self.assertRaisesRegex(OSError, "offline test"):
+                    prepare_bullet.acquire(root / "output", root / "evidence", download=True)
+            diagnostic = json.loads((root / "evidence/bullet-acquisition-error.json").read_text())
+            self.assertEqual(diagnostic["failure_reason"], "offline test")
+            self.assertEqual(diagnostic["bytes_downloaded"], 0)
+            self.assertFalse(diagnostic["transfer_completed"])
+            self.assertFalse(diagnostic["sha512_verification_attempted"])
+            self.assertEqual((root / "evidence/bullet-acquisition-error.txt").read_text(), "offline test\n")
 
 
 class SourceAndWorkflowContracts(unittest.TestCase):

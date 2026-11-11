@@ -20,7 +20,8 @@ URL = "https://github.com/bulletphysics/bullet3/archive/refs/tags/3.25.tar.gz"
 SHA512 = ("7086e5fcf69635801bb311261173cb8d173b712ca1bd78be03df48fad884674"
           "e85512861190e45a1a62d5627aaad65cde08c175c44a3be9afa410d3dfd5358d4")
 ARCHIVE_ROOT = "bullet3-3.25"
-MAX_ARCHIVE = 100 * 1024 * 1024
+# The reported Bullet 3.25 tarball is about 133 MiB; allow bounded headroom.
+MAX_ARCHIVE = 192 * 1024 * 1024
 MAX_EXPANDED = 1024 * 1024 * 1024
 
 
@@ -38,11 +39,15 @@ def digest(path):
     return hash_.hexdigest()
 
 
-def verify_archive(path):
+def verify_archive(path, diagnostics=None):
     verify_upstream_pin()
     if not path.is_file() or path.is_symlink() or path.stat().st_size > MAX_ARCHIVE:
         raise ValueError("Bullet archive missing, linked or too large")
+    if diagnostics is not None:
+        diagnostics["sha512_verification_attempted"] = True
     actual = digest(path)
+    if diagnostics is not None and diagnostics["transfer_completed"]:
+        diagnostics["actual_sha512"] = actual
     if actual != SHA512:
         raise ValueError("Bullet SHA-512 mismatch: " + actual)
     return actual
@@ -114,7 +119,6 @@ def extract_verified(archive, destination):
 
 
 def acquire(output, evidence, archive=None, download=False):
-    verify_upstream_pin()
     output = output.resolve()
     evidence = evidence.resolve()
     if output.is_relative_to(REPO) or evidence.is_relative_to(REPO):
@@ -124,23 +128,44 @@ def acquire(output, evidence, archive=None, download=False):
     output.mkdir(parents=True, exist_ok=True)
     evidence.mkdir(parents=True, exist_ok=True)
     local_archive = output / "bullet-3.25.tar.gz"
-    if download:
-        request = urllib.request.Request(URL, headers={"User-Agent": "OpenMW-G0B-pinned-source"})
-        with urllib.request.urlopen(request, timeout=60) as response, local_archive.open("xb") as target:
-            while True:
-                block = response.read(1024 * 1024)
-                if not block:
-                    break
-                if target.tell() + len(block) > MAX_ARCHIVE:
-                    raise ValueError("Bullet download exceeds limit")
-                target.write(block)
-    elif archive is not None:
-        verify_archive(archive)
-        shutil.copyfile(archive, local_archive)
-    else:
-        raise ValueError("Provide a verified local archive or explicitly request CI download")
+    diagnostics = {"compressed_archive_limit_bytes": MAX_ARCHIVE,
+                   "http_content_length_provided": False, "http_content_length_bytes": None,
+                   "bytes_downloaded": 0,
+                   "transfer_completed": False, "sha512_verification_attempted": False,
+                   "archive_verified": False}
     try:
-        actual = verify_archive(local_archive)
+        verify_upstream_pin()
+        if download:
+            request = urllib.request.Request(URL, headers={"User-Agent": "OpenMW-G0B-pinned-source"})
+            with urllib.request.urlopen(request, timeout=60) as response:
+                length = response.headers.get("Content-Length")
+                if length is not None:
+                    diagnostics["http_content_length_provided"] = True
+                    if not length.isascii() or not length.isdecimal():
+                        raise ValueError("Invalid Bullet Content-Length")
+                    diagnostics["http_content_length_bytes"] = int(length)
+                    if diagnostics["http_content_length_bytes"] > MAX_ARCHIVE:
+                        raise ValueError("Bullet Content-Length exceeds limit")
+                with local_archive.open("xb") as target:
+                    while True:
+                        remaining = MAX_ARCHIVE - diagnostics["bytes_downloaded"]
+                        block = response.read(min(1024 * 1024, max(1, remaining)))
+                        if not block:
+                            if (diagnostics["http_content_length_provided"]
+                                    and diagnostics["bytes_downloaded"] != diagnostics["http_content_length_bytes"]):
+                                raise ValueError("Bullet download length differs from Content-Length")
+                            diagnostics["transfer_completed"] = True
+                            break
+                        diagnostics["bytes_downloaded"] += len(block)
+                        if diagnostics["bytes_downloaded"] > MAX_ARCHIVE:
+                            raise ValueError("Bullet download exceeds limit")
+                        target.write(block)
+        elif archive is not None:
+            verify_archive(archive, diagnostics)
+            shutil.copyfile(archive, local_archive)
+        else:
+            raise ValueError("Provide a verified local archive or explicitly request CI download")
+        actual = verify_archive(local_archive, diagnostics)
         licenses = extract_verified(local_archive, output / "source")
         license_paths = []
         for index, name in enumerate(licenses):
@@ -158,6 +183,14 @@ def acquire(output, evidence, archive=None, download=False):
         (evidence / "bullet-provenance.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         return report
     except Exception as error:
+        if download and not diagnostics["transfer_completed"]:
+            try:
+                local_archive.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                diagnostics["partial_archive_cleanup_error"] = str(cleanup_error)
+        diagnostics["failure_reason"] = str(error)
+        (evidence / "bullet-acquisition-error.json").write_text(
+            json.dumps(diagnostics, indent=2) + "\n", encoding="utf-8")
         (evidence / "bullet-acquisition-error.txt").write_text(str(error) + "\n", encoding="utf-8")
         raise
 
