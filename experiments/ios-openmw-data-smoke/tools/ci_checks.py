@@ -105,13 +105,30 @@ def verify_resources(files, directory):
 def locate(build, kind, evidence):
     name = package.APP_NAME if kind == 'app' else 'openmw-data-link-check'
     matches = [p for p in build.rglob(name) if p.is_dir() == (kind == 'app')]
-    write_json(evidence / (kind + '-locations.json'), {'matches': [str(p) for p in matches]})
-    require(len(matches) == 1 and not matches[0].is_symlink(), 'Expected unique ' + name)
-    require(kind == 'app' or matches[0].stat().st_size > 0, 'Empty link executable')
+    if kind == 'app':
+        expected = build / 'Release-iphoneos' / name
+        write_json(evidence / 'app-locations.json', {'matches': [str(p) for p in matches],
+            'expected': str(expected)})
+        require(build.is_dir() and not build.is_symlink(), 'Invalid build directory')
+        require(len(matches) == 1 and matches[0] == expected, 'Expected unique Release-iphoneos application product')
+        require(not expected.parent.is_symlink() and not expected.is_symlink()
+                and expected.is_dir() and expected.resolve().is_relative_to(build.resolve()),
+                'Missing, linked or escaping Release application bundle')
+        executable = expected / package.EXECUTABLE
+        require(executable.is_file() and not executable.is_symlink() and executable.stat().st_size > 0
+                and executable.resolve().is_relative_to(expected.resolve()),
+                'Missing, linked or empty application executable')
+        package.validate_device_executable(executable.read_bytes())
+        selected = expected
+    else:
+        write_json(evidence / 'link-locations.json', {'matches': [str(p) for p in matches]})
+        require(len(matches) == 1 and not matches[0].is_symlink(), 'Expected unique ' + name)
+        require(matches[0].stat().st_size > 0, 'Empty link executable')
+        selected = matches[0]
     if os.environ.get('GITHUB_ENV'):
         with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
-            stream.write(('APP_PATH' if kind == 'app' else 'LINK_PATH') + '=' + str(matches[0]) + '\n')
-    return {'valid': True, 'path': str(matches[0])}
+            stream.write(('APP_PATH' if kind == 'app' else 'LINK_PATH') + '=' + str(selected) + '\n')
+    return {'valid': True, 'path': str(selected)}
 
 
 def app_report(app, directory, sdk, evidence):

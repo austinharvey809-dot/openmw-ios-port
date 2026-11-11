@@ -54,6 +54,18 @@ set_target_properties(IOSOpenMWDataSmoke PROPERTIES
     XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.openmw.experiments.ios-openmw-data-smoke"
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1" XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
     XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym")
-add_custom_command(TARGET IOSOpenMWDataSmoke POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${_generated}/resources" "$<TARGET_BUNDLE_DIR:IOSOpenMWDataSmoke>"
-    VERBATIM)
+# Let Xcode copy each prepared file into its actual product for every configuration.
+# MACOSX_PACKAGE_LOCATION is relative to the iOS .app root, without a Resources prefix.
+foreach(_resource IN ITEMS
+    Fixtures/valid.esm Fixtures/base.bsa Fixtures/fixtures.json
+    data-build.json Licenses/OpenMW-LICENSE.txt Licenses/OSG-LICENSE.txt
+    Provenance/osg/Config)
+    set(_resource_path "${_generated}/resources/${_resource}")
+    get_filename_component(_bundle_directory "${_resource}" DIRECTORY)
+    if(_bundle_directory STREQUAL "")
+        set(_bundle_directory ".")
+    endif()
+    set_source_files_properties("${_resource_path}" PROPERTIES
+        HEADER_FILE_ONLY TRUE MACOSX_PACKAGE_LOCATION "${_bundle_directory}")
+    target_sources(IOSOpenMWDataSmoke PRIVATE "${_resource_path}")
+endforeach()

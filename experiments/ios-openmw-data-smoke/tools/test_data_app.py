@@ -79,7 +79,8 @@ class BuildAndAppTests(unittest.TestCase):
         self.assertLess(CMAKE.index('execute_process('), CMAKE.index('add_executable('))
         self.assertIn('message(FATAL_ERROR "Data-smoke fixture/provenance preparation failed:', CMAKE)
         self.assertIn('"${_generated}/include"', CMAKE)
-        self.assertIn('copy_directory "${_generated}/resources" "$<TARGET_BUNDLE_DIR:IOSOpenMWDataSmoke>"', CMAKE)
+        self.assertIn('MACOSX_PACKAGE_LOCATION "${_bundle_directory}"', CMAKE)
+        self.assertIn('target_sources(IOSOpenMWDataSmoke PRIVATE "${_resource_path}")', CMAKE)
 
     def test_info_plist_scene_and_export_contract(self):
         plist = plistlib.loads((ROOT / 'Info.plist.in').read_bytes())

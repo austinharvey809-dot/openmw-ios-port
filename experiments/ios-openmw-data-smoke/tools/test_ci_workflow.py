@@ -216,28 +216,128 @@ class EvidenceTests(unittest.TestCase):
                 self.assertFalse(json.loads((Path(temporary) / 'python-regressions.json').read_text())['valid'])
 
     def test_unique_product_location_rejects_missing_empty_and_ambiguous_outputs(self):
-        for kind, name in (('link', 'openmw-data-link-check'), ('app', ci.package.APP_NAME)):
-            for failure in ('missing', 'ambiguous', 'none'):
-                with self.subTest(kind=kind, failure=failure), tempfile.TemporaryDirectory() as temporary:
-                    root = Path(temporary)
-                    build, evidence = root / 'build', root / 'evidence'
-                    build.mkdir(); evidence.mkdir()
-                    if failure != 'missing':
-                        path = build / name
-                        path.mkdir() if kind == 'app' else path.write_bytes(b'test product, not native evidence')
-                    if failure == 'ambiguous':
-                        (build / 'second').mkdir()
-                        second = build / 'second' / name
-                        second.mkdir() if kind == 'app' else second.write_bytes(b'other')
-                    with patch.dict(os.environ, {'GITHUB_ENV': str(root / 'env')}):
-                        if failure == 'none':
-                            self.assertTrue(ci.locate(build, kind, evidence)['valid'])
-                            self.assertIn(str(path), (root / 'env').read_text())
-                        else:
-                            with self.assertRaises(ValueError): ci.locate(build, kind, evidence)
-                    if kind == 'link' and failure == 'none':
-                        path.write_bytes(b'')
-                        with self.assertRaisesRegex(ValueError, 'Empty'): ci.locate(build, kind, evidence)
+        for failure in ('missing', 'ambiguous', 'none'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                build, evidence = root / 'build', root / 'evidence'
+                build.mkdir(); evidence.mkdir()
+                name = 'openmw-data-link-check'
+                if failure != 'missing':
+                    path = build / name
+                    path.write_bytes(b'test product, not native evidence')
+                if failure == 'ambiguous':
+                    (build / 'second').mkdir()
+                    (build / 'second' / name).write_bytes(b'other')
+                with patch.dict(os.environ, {'GITHUB_ENV': str(root / 'env')}):
+                    if failure == 'none':
+                        self.assertTrue(ci.locate(build, 'link', evidence)['valid'])
+                        self.assertIn(str(path), (root / 'env').read_text())
+                    else:
+                        with self.assertRaises(ValueError): ci.locate(build, 'link', evidence)
+                if failure == 'none':
+                    path.write_bytes(b'')
+                    with self.assertRaisesRegex(ValueError, 'Empty'): ci.locate(build, 'link', evidence)
+
+    def test_cmake_bundles_exact_prepared_files_without_an_extra_resources_prefix(self):
+        cmake = (ci.ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
+        block = cmake.split('foreach(_resource IN ITEMS', 1)[1].split('endforeach()', 1)[0]
+        names = block.split(')', 1)[0].split()
+        self.assertEqual(set(names), {
+            'Fixtures/valid.esm', 'Fixtures/base.bsa', 'Fixtures/fixtures.json',
+            'data-build.json', 'Licenses/OpenMW-LICENSE.txt', 'Licenses/OSG-LICENSE.txt',
+            'Provenance/osg/Config'})
+        self.assertEqual(len(names), 7)
+        self.assertIn('get_filename_component(_bundle_directory "${_resource}" DIRECTORY)', block)
+        self.assertIn('set(_bundle_directory ".")', block)
+        self.assertIn('HEADER_FILE_ONLY TRUE MACOSX_PACKAGE_LOCATION "${_bundle_directory}"', block)
+        self.assertIn('target_sources(IOSOpenMWDataSmoke PRIVATE "${_resource_path}")', block)
+        self.assertNotIn('POST_BUILD', cmake)
+        self.assertNotIn('copy_directory "${_generated}/resources"', cmake)
+        self.assertNotIn('Resources/', block)
+        self.assertNotIn('EFFECTIVE_PLATFORM_NAME', cmake)
+
+    def test_app_discovery_requires_the_real_release_product_and_executable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); build = root / 'build'; evidence = root / 'evidence'
+            product = build / 'Release-iphoneos' / ci.package.APP_NAME
+            product.mkdir(parents=True); evidence.mkdir()
+            executable = product / ci.package.EXECUTABLE
+            executable.write_bytes(packaging_tests.binary())  # Synthetic validator input; no native build claim.
+            with patch.dict(os.environ, {'GITHUB_ENV': str(root / 'env')}):
+                self.assertEqual(ci.locate(build, 'app', evidence)['path'], str(product))
+            self.assertIn('APP_PATH=' + str(product), (root / 'env').read_text())
+            report = json.loads((evidence / 'app-locations.json').read_text())
+            self.assertEqual(report['expected'], str(product))
+            self.assertIn(str(product), report['matches'])
+            executable.unlink()
+            with self.assertRaisesRegex(ValueError, 'application executable'): ci.locate(build, 'app', evidence)
+            executable.write_bytes(b'')
+            with self.assertRaisesRegex(ValueError, 'application executable'): ci.locate(build, 'app', evidence)
+            executable.write_bytes(b'arbitrary named file')
+            with self.assertRaises(ci.package.ValidationError): ci.locate(build, 'app', evidence)
+
+    def test_app_discovery_rejects_missing_ambiguous_and_unexpected_layouts(self):
+        for failure in ('missing-product', 'wrong-config-only', 'ambiguous-release',
+                        'literal-resource-app', 'unexpected-only'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); build = root / 'build'; evidence = root / 'evidence'
+                product = build / 'Release-iphoneos' / ci.package.APP_NAME
+                product.mkdir(parents=True); evidence.mkdir()
+                (product / ci.package.EXECUTABLE).write_bytes(packaging_tests.binary())
+                if failure == 'missing-product':
+                    (product / ci.package.EXECUTABLE).unlink(); product.rmdir()
+                elif failure == 'wrong-config-only':
+                    wrong = build / 'Debug-iphoneos' / ci.package.APP_NAME
+                    wrong.mkdir(parents=True)
+                    (product / ci.package.EXECUTABLE).unlink(); product.rmdir()
+                elif failure == 'ambiguous-release':
+                    other = build / 'nested' / 'Release-iphoneos' / ci.package.APP_NAME
+                    other.mkdir(parents=True)
+                    (other / ci.package.EXECUTABLE).write_bytes(packaging_tests.binary())
+                elif failure == 'literal-resource-app':
+                    other = build / 'Release${EFFECTIVE_PLATFORM_NAME}' / ci.package.APP_NAME
+                    other.mkdir(parents=True)
+                    (other / 'data-build.json').write_bytes(b'wrong location')
+                else:
+                    unexpected = build / 'unexpected' / ci.package.APP_NAME
+                    unexpected.mkdir(parents=True)
+                    (product / ci.package.EXECUTABLE).unlink(); product.rmdir()
+                with self.assertRaises(ValueError): ci.locate(build, 'app', evidence)
+                self.assertTrue((evidence / 'app-locations.json').is_file())
+
+    def test_app_discovery_rejects_symlinked_bundle_parent_executable_or_build(self):
+        for target in ('bundle', 'parent', 'executable', 'build'):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); build = root / 'build'; evidence = root / 'evidence'
+                product = build / 'Release-iphoneos' / ci.package.APP_NAME
+                product.mkdir(parents=True); evidence.mkdir()
+                executable = product / ci.package.EXECUTABLE
+                executable.write_bytes(packaging_tests.binary())
+                linked = {'bundle': product, 'parent': product.parent, 'executable': executable,
+                          'build': build}[target]
+                original = Path.is_symlink
+                with patch.object(Path, 'is_symlink', lambda path: path == linked or original(path)):
+                    with self.assertRaises(ValueError): ci.locate(build, 'app', evidence)
+
+    def test_complete_root_relative_bundle_resources_and_misplacement_rejection(self):
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(temporary)
+            config = root / 'Config'; config.write_text(app_tests.genuine_config_text(), encoding='utf-8')
+            prepared = root / 'prepared'; ci.inputs.prepare(prepared, app_tests.OSG, config)
+            files = packaging_tests.bundle(ci.inputs.MANIFEST.read_bytes(), ci.inputs.fixture_bytes())
+            resources = ci.tree(prepared / 'resources')
+            files.update({name: ci.package.Entry(data, packaging_tests.REGULAR) for name, data in resources.items()})
+            self.assertEqual(set(resources), {
+                'Fixtures/valid.esm', 'Fixtures/base.bsa', 'Fixtures/fixtures.json',
+                'data-build.json', 'Licenses/OpenMW-LICENSE.txt', 'Licenses/OSG-LICENSE.txt',
+                'Provenance/osg/Config'})
+            self.assertEqual(ci.package.validate_bundle(files)['bundle_identifier'], ci.package.BUNDLE_ID)
+            self.assertEqual(set(ci.verify_resources(files, prepared)), set(resources))
+            for name in ('Fixtures/valid.esm', 'data-build.json', 'Provenance/osg/Config'):
+                misplaced = dict(files)
+                misplaced['Resources/' + name] = misplaced.pop(name)
+                with self.subTest(name=name), self.assertRaises((ValueError, ci.package.ValidationError)):
+                    ci.verify_resources(misplaced, prepared)
 
     def test_prepared_inputs_and_provenance_tampering_rejected(self):
         with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stdout(io.StringIO()):
