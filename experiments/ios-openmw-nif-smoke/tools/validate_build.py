@@ -7,6 +7,7 @@ import re
 
 
 def audit(build, bullet_source):
+    bullet_source = bullet_source.resolve()
     cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
     required = ("USE_DOUBLE_PRECISION:BOOL=ON", "BUILD_SHARED_LIBS:BOOL=OFF",
                 "BUILD_BULLET3:BOOL=OFF", "BUILD_BULLET2_DEMOS:BOOL=OFF",
