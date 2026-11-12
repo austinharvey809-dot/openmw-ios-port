@@ -1,0 +1,47 @@
+{
+    "scope":  "G1B preparation; no device rendering acceptance",
+    "graphics_baseline_commit":  "8799e90148c3ea1985b2547fa8e9b31be19b45c2",
+    "source_origins":  {
+                           "baseline/tools/check_angle_headers.py":  {
+                                                                         "kind":  "exact Git blob copy",
+                                                                         "source":  "experiments/ios-osg-smoke/tools/check_angle_headers.py"
+                                                                     },
+                           "cmake/provider.cmake":  {
+                                                        "kind":  "adapted provider prefix; path/project changes and audited precision settings",
+                                                        "source":  "experiments/ios-osg-smoke/CMakeLists.txt"
+                                                    },
+                           "baseline/data/osg-lock.json":  {
+                                                               "kind":  "exact Git blob copy",
+                                                               "source":  "experiments/ios-osg-smoke/data/osg-lock.json"
+                                                           },
+                           "baseline/tools/prepare_osg.py":  {
+                                                                 "kind":  "exact Git blob copy",
+                                                                 "source":  "experiments/ios-osg-smoke/tools/prepare_osg.py"
+                                                             },
+                           "src/AngleRenderer.hpp":  {
+                                                         "kind":  "exact Renderer class extracted; pragma once added",
+                                                         "source":  "experiments/ios-osg-smoke/src/main.mm"
+                                                     },
+                           "baseline/src/GLDebugCapture.hpp":  {
+                                                                   "kind":  "exact Git blob copy",
+                                                                   "source":  "experiments/ios-osg-smoke/src/GLDebugCapture.hpp"
+                                                               },
+                           "Info.plist.in":  {
+                                                 "kind":  "adapted display name, scene delegate and explicit iPhoneOS/deployment/device-family keys",
+                                                 "source":  "experiments/ios-osg-smoke/Info.plist.in"
+                                             },
+                           "baseline/tools/check_osg_source.py":  {
+                                                                      "kind":  "exact Git blob copy",
+                                                                      "source":  "experiments/ios-osg-smoke/tools/check_osg_source.py"
+                                                                  },
+                           "src/OSGScene.hpp":  {
+                                                    "kind":  "adapted embedded viewer, exact colored shaders and diagnostics; geometry comes from G1A",
+                                                    "source":  "experiments/ios-osg-smoke/src/OSGScene.hpp"
+                                                },
+                           "src/main.mm":  {
+                                               "kind":  "adapted UIKit/lifecycle/controller/export helpers with genuine parsing and provenance",
+                                               "source":  "experiments/ios-osg-smoke/src/main.mm"
+                                           }
+                       },
+    "g1a_validated_commit":  "fa3451ab825750f241b37ef6021c6b7ff48724f5"
+}
