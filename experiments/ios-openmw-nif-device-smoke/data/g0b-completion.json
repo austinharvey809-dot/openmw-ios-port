@@ -1,0 +1,74 @@
+{
+    "schema_version":  1,
+    "run_url":  "https://github.com/austinharvey809-dot/openmw-ios-port/actions/runs/42954098459",
+    "source_commit":  "64cad82d891438c5d07ed4904321e4d04901aa0b",
+    "platform":  "macOS ARM64 host only",
+    "osg_revision":  "9b384d5439977784e5cd250ff8ff7966928ddd27",
+    "bullet_version":  "3.25",
+    "bullet_sha512":  "7086e5fcf69635801bb311261173cb8d173b712ca1bd78be03df48fad884674e85512861190e45a1a62d5627aaad65cde08c175c44a3be9afa410d3dfd5358d4",
+    "tests":  46,
+    "observed_counts":  {
+                            "records":  3,
+                            "roots":  1,
+                            "geometry":  1,
+                            "vertices":  3,
+                            "triangles":  1
+                        },
+    "negative_cases":  [
+                           "invalid",
+                           "truncated",
+                           "invalid-reference",
+                           "missing",
+                           "wrong-resource-bytes"
+                       ],
+    "artifact":  {
+                     "id":  13825894163,
+                     "size_in_bytes":  317618,
+                     "reported_sha256":  "6a35d315cd516df813332a15a91edb66f017a2ffd66fa2e7a5565cfea17e7760",
+                     "content_verification":  "unverified locally; API listing and job logs verified"
+                 },
+    "device_execution":  "not performed",
+    "rendering":  "not performed",
+    "fixture_files":  {
+                          "invalid-header.bsa":  {
+                                                     "sha256":  "aa4b690a654334ab392417db891e67f93ca89dad975f636fbc9363ad86370c18",
+                                                     "size":  440
+                                                 },
+                          "invalid-header.nif":  {
+                                                     "sha256":  "772cba6c6370d6c0d0b23667026e3acb9de9c22f9f5a4fdc8b0dfee963b3a95b",
+                                                     "size":  392
+                                                 },
+                          "invalid-reference.bsa":  {
+                                                        "sha256":  "aacba465160ee4c7e7bb5e20635a3bfb38df806bb9aa24601d0482085006e08a",
+                                                        "size":  440
+                                                    },
+                          "invalid-reference.nif":  {
+                                                        "sha256":  "55c27c3592f14f69feb1a665488294e015e0b1c7e6cb296023886d213131e4bb",
+                                                        "size":  392
+                                                    },
+                          "missing-resource.bsa":  {
+                                                       "sha256":  "ecc6ad80b0bda91fc90200161d92b2f8786d996ead4a7d0c087f9f9afccc798b",
+                                                       "size":  58
+                                                   },
+                          "triangle-candidate.bsa":  {
+                                                         "sha256":  "72adc5667e62f146d4bfa770b568b29b3f519def6cce1784a49f67c632058ec3",
+                                                         "size":  440
+                                                     },
+                          "triangle-candidate.nif":  {
+                                                         "sha256":  "0b77632dd08be22a3df33be66939065e4d467fa1231b9a12459f844224f846ff",
+                                                         "size":  392
+                                                     },
+                          "truncated.bsa":  {
+                                                "sha256":  "d48bc2bc014f99ff84ee12ae8ecc867f1ff05798b67524961c703cf7cbe590ed",
+                                                "size":  423
+                                            },
+                          "truncated.nif":  {
+                                                "sha256":  "66c8c54b1623a796f151c009a5c164da6f25250103a2e7aedc790bddd92fa63b",
+                                                "size":  375
+                                            },
+                          "valid.esm":  {
+                                            "sha256":  "48fdfa9d1aed2bb3d82169cd16574088373c4deaff3a39e9b40ea809157fcd9f",
+                                            "size":  376
+                                        }
+                      }
+}

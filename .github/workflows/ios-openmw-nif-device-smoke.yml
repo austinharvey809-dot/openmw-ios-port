@@ -1,0 +1,301 @@
+name: iOS OpenMW G0C native NIF link and unsigned IPA
+
+# Review and authorize a manual run. No push or pull-request trigger.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPERIMENT: experiments/ios-openmw-nif-smoke
+  OPENMW_SOURCE: ${{ github.workspace }}/openmw
+  OPENMW_ESM_OSG_SOURCE: ${{ github.workspace }}/osg-pinned
+  OSG_REVISION: 9b384d5439977784e5cd250ff8ff7966928ddd27
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  host-validation:
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize evidence before checkout
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-g0b-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-g0b-build"
+          BULLET_ROOT="$RUNNER_TEMP/openmw-g0b-bullet"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\nBULLET_ROOT=%s\n' \
+            "$EVIDENCE" "$BUILD_DIR" "$BULLET_ROOT" >> "$GITHUB_ENV"
+          printf 'Requested %s at %s; OSG %s\n' \
+            "$GITHUB_REF" "$GITHUB_SHA" "$OSG_REVISION" > "$EVIDENCE/run.txt"
+
+      - name: Check out requested OpenMW source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: openmw
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          persist-credentials: false
+
+      - name: Check out exact pinned OSG source
+        uses: actions/checkout@v6
+        with:
+          repository: OpenMW/osg
+          ref: 9b384d5439977784e5cd250ff8ff7966928ddd27
+          path: osg-pinned
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          persist-credentials: false
+
+      - name: Verify revisions, A-E preservation, and source contracts
+        id: source_gate
+        run: |
+          set -euo pipefail
+          {
+            set -x
+            test "$GITHUB_REF" = refs/heads/ios-port
+            test "$(git -C "$OPENMW_SOURCE" rev-parse HEAD)" = "$GITHUB_SHA"
+            test "$(git -C "$OPENMW_ESM_OSG_SOURCE" rev-parse HEAD)" = "$OSG_REVISION"
+            sw_vers
+            xcodebuild -version
+            xcrun --sdk macosx clang++ --version
+            cmake --version
+            python3 --version
+            git -C "$OPENMW_SOURCE" diff --check
+          } 2>&1 | tee "$EVIDENCE/toolchain-and-revisions.log"
+          python3 "$OPENMW_SOURCE/experiments/ios-openmw-esm-vfs/tools/audit_sources.py" \
+            --osg-source "$OPENMW_ESM_OSG_SOURCE" --require-complete \
+            2>&1 | tee "$EVIDENCE/esm-vfs-source-audit.log"
+          python3 "$OPENMW_SOURCE/experiments/ios-openmw-data-smoke/tools/ci_checks.py" inventory \
+            --evidence "$EVIDENCE" 2>&1 | tee "$EVIDENCE/prior-milestones.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/audit_g0.py" \
+            2>&1 | tee "$EVIDENCE/nif-source-and-fixture-audit.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/$EXPERIMENT/tools" -p 'test_g0_ci.py' -v \
+            2>&1 | tee "$EVIDENCE/offline-contract-tests.log"
+
+      - name: Download and verify exact Bullet 3.25 archive before extraction
+        id: bullet_gate
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/prepare_bullet.py" --download \
+            --output "$BULLET_ROOT" --evidence "$EVIDENCE" \
+            2>&1 | tee "$EVIDENCE/bullet-acquisition.log"
+          test -s "$EVIDENCE/bullet-provenance.json"
+          test -s "$EVIDENCE/bullet-license-0.txt"
+
+      - name: Configure genuine parser and static double-precision Bullet
+        id: configure_gate
+        run: |
+          set -euo pipefail
+          cmake -S "$OPENMW_SOURCE/$EXPERIMENT" -B "$BUILD_DIR" -G 'Unix Makefiles' \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" \
+            -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
+            -DCMAKE_CXX_COMPILER="$(xcrun --sdk macosx --find clang++)" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            2>&1 | tee "$EVIDENCE/configure.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/validate_build.py" \
+            --build "$BUILD_DIR" --bullet-source "$BULLET_ROOT/source" \
+            2>&1 | tee "$EVIDENCE/build-configuration-audit.log"
+
+      - name: Compile and link genuine OpenMW parser host executable
+        id: build_gate
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --target openmw-nif-parse-check --parallel 4 \
+            2>&1 | tee "$EVIDENCE/build.log"
+          test -x "$BUILD_DIR/openmw-nif-parse-check"
+          shasum -a 256 "$BUILD_DIR/openmw-nif-parse-check" \
+            > "$EVIDENCE/parser-executable-sha256.txt"
+          otool -L "$BUILD_DIR/openmw-nif-parse-check" \
+            > "$EVIDENCE/parser-dependencies.txt"
+
+      - name: Execute positive and negative genuine parser cases
+        id: parser_gate
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$BUILD_DIR" -R '^openmw-g0a-parser-candidates$' \
+            --output-on-failure -V 2>&1 | tee "$EVIDENCE/parser-runtime.log"
+
+      - name: Preserve diagnostics, gate outcomes and evidence hashes
+        if: always()
+        env:
+          SOURCE_GATE: ${{ steps.source_gate.outcome }}
+          BULLET_GATE: ${{ steps.bullet_gate.outcome }}
+          CONFIGURE_GATE: ${{ steps.configure_gate.outcome }}
+          BUILD_GATE: ${{ steps.build_gate.outcome }}
+          PARSER_GATE: ${{ steps.parser_gate.outcome }}
+        run: |
+          set -euo pipefail
+          if test -n "${BUILD_DIR:-}" && test -d "$BUILD_DIR"; then
+            find "$BUILD_DIR" \( -name CMakeError.log -o -name CMakeOutput.log -o -name CMakeConfigureLog.yaml \) \
+              -type f -print -exec cp {} "$EVIDENCE/" \; 2>&1 | tee "$EVIDENCE/cmake-diagnostics-collection.log"
+            if test -f "$BUILD_DIR/CMakeCache.txt"; then
+              cp "$BUILD_DIR/CMakeCache.txt" "$EVIDENCE/CMakeCache.txt"
+            fi
+          fi
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['EVIDENCE'])
+          gates = {name: os.environ.get(key) or 'not-run' for name, key in (
+              ('source_and_fixture_audit', 'SOURCE_GATE'),
+              ('bullet_acquisition_and_hash', 'BULLET_GATE'),
+              ('host_configuration', 'CONFIGURE_GATE'),
+              ('host_compile_and_link', 'BUILD_GATE'),
+              ('genuine_parser_runtime', 'PARSER_GATE'))}
+          status = {'job_kind': 'G0B host-native', 'gates': gates,
+                    'iphoneos_link': 'not-performed', 'physical_device_execution': 'not-performed',
+                    'meaning': 'Only genuine_parser_runtime=success supports a host parse claim'}
+          (root / 'job-status.json').write_text(json.dumps(status, indent=2) + '\n')
+          (root / 'SHA256SUMS').write_text('\n'.join(
+              hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(root).as_posix()
+              for p in sorted(root.rglob('*')) if p.is_file() and p != root / 'SHA256SUMS') + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('G0B host gates (source, Bullet, configure, build, parser): ' +
+                  ', '.join(gates.values()) + '\n\nNo iPhoneOS or physical-device test was run.\n')
+          PY
+
+      - name: Upload host evidence, including failures
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: g0c-host-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-g0b-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  native-device:
+    needs: host-validation
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      EXPERIMENT: experiments/ios-openmw-nif-device-smoke
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize G0C failure evidence
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-g0c-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-g0c-build"
+          BULLET_ROOT="$RUNNER_TEMP/openmw-g0c-bullet"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\nBULLET_ROOT=%s\n' "$EVIDENCE" "$BUILD_DIR" "$BULLET_ROOT" >> "$GITHUB_ENV"
+          printf 'Requested %s at %s\n' "$GITHUB_REF" "$GITHUB_SHA" > "$EVIDENCE/request.txt"
+      - name: Check out exact requested OpenMW source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: openmw
+          submodules: false
+          lfs: false
+          persist-credentials: false
+      - name: Check out exact pinned OSG source
+        uses: actions/checkout@v6
+        with:
+          repository: OpenMW/osg
+          ref: 9b384d5439977784e5cd250ff8ff7966928ddd27
+          path: osg-pinned
+          submodules: false
+          lfs: false
+          persist-credentials: false
+      - name: Source audits and offline G0C regressions
+        id: source
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/ios-port
+          test "$(git -C "$OPENMW_SOURCE" rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C "$OPENMW_ESM_OSG_SOURCE" rev-parse HEAD)" = "$OSG_REVISION"
+          { sw_vers; xcodebuild -version; xcrun --sdk iphoneos --show-sdk-path; xcrun --sdk iphoneos clang++ --version; cmake --version; python3 --version; } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/ci.py" sources --osg-source "$OPENMW_ESM_OSG_SOURCE" --evidence "$EVIDENCE" 2>&1 | tee "$EVIDENCE/sources.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/$EXPERIMENT/tools" -p 'test_*.py' -v 2>&1 | tee "$EVIDENCE/regressions.log"
+          git -C "$OPENMW_SOURCE" diff --check
+      - name: Acquire exact verified Bullet 3.25
+        id: bullet
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/experiments/ios-openmw-nif-smoke/tools/prepare_bullet.py" --download --output "$BULLET_ROOT" --evidence "$EVIDENCE" 2>&1 | tee "$EVIDENCE/bullet.log"
+      - name: Configure isolated iPhoneOS ARM64 project
+        id: configure
+        run: |
+          set -euo pipefail
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          printf 'IPHONEOS_SDK=%s\n' "$SDK" >> "$GITHUB_ENV"
+          cmake -S "$OPENMW_SOURCE/$EXPERIMENT" -B "$BUILD_DIR" -G 'Unix Makefiles' \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$SDK" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_C_COMPILER="$(xcrun --sdk iphoneos --find clang)" \
+            -DCMAKE_CXX_COMPILER="$(xcrun --sdk iphoneos --find clang++)" \
+            -DCMAKE_OBJCXX_COMPILER="$(xcrun --sdk iphoneos --find clang++)" \
+            -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" \
+            -DG0_BULLET_SOURCE="$BULLET_ROOT/source" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            2>&1 | tee "$EVIDENCE/configure.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/ci.py" configured --build "$BUILD_DIR" --bullet-source "$BULLET_ROOT/source" --evidence "$EVIDENCE" 2>&1 | tee "$EVIDENCE/configured.log"
+      - name: G0C0 genuine iPhoneOS executable link and dependency inspection
+        id: g0c0
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --target openmw-nif-device-link-check --parallel 4 2>&1 | tee "$EVIDENCE/g0c0-link.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/package_ios.py" link --product "$BUILD_DIR/openmw-nif-device-link-check" --sdk "$IPHONEOS_SDK" --evidence "$EVIDENCE/g0c0"
+      - name: G0C1 UIKit application compilation and linking
+        id: g0c1
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --target IOSOpenMWNifSmoke --parallel 4 2>&1 | tee "$EVIDENCE/g0c1-app.log"
+          test -x "$BUILD_DIR/IOSOpenMWNifSmoke.app/IOSOpenMWNifSmoke"
+      - name: G0C2 complete bundle fixture and provenance validation
+        id: g0c2
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/package_ios.py" bundle --product "$BUILD_DIR/IOSOpenMWNifSmoke.app" --prepared "$BUILD_DIR/prepared" --sdk "$IPHONEOS_SDK" --evidence "$EVIDENCE/g0c2"
+      - name: G0C3 unsigned IPA packaging and independent reopening
+        id: g0c3
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/package_ios.py" ipa --product "$BUILD_DIR/IOSOpenMWNifSmoke.app" --prepared "$BUILD_DIR/prepared" --sdk "$IPHONEOS_SDK" --output "$EVIDENCE/IOSOpenMWNifSmoke-unsigned.ipa" --evidence "$EVIDENCE/g0c3"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/package_ios.py" reopen --product "$EVIDENCE/IOSOpenMWNifSmoke-unsigned.ipa" --prepared "$BUILD_DIR/prepared" --sdk "$IPHONEOS_SDK" --evidence "$EVIDENCE/reopen"
+      - name: Preserve available diagnostics and separate gate outcomes
+        if: always()
+        env:
+          SOURCE: ${{ steps.source.outcome }}
+          BULLET: ${{ steps.bullet.outcome }}
+          CONFIGURE: ${{ steps.configure.outcome }}
+          G0C0: ${{ steps.g0c0.outcome }}
+          G0C1: ${{ steps.g0c1.outcome }}
+          G0C2: ${{ steps.g0c2.outcome }}
+          G0C3: ${{ steps.g0c3.outcome }}
+        run: |
+          set -euo pipefail
+          if test -f "$OPENMW_SOURCE/$EXPERIMENT/tools/ci.py"; then
+            python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/ci.py" collect --build "$BUILD_DIR" --evidence "$EVIDENCE/diagnostics"
+          fi
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['EVIDENCE'])
+          status = {key: os.environ.get(key) or 'not-run' for key in ('SOURCE','BULLET','CONFIGURE','G0C0','G0C1','G0C2','G0C3')}
+          status.update(physical_device_execution='not-performed', signing='not-performed')
+          (root / 'gate-status.json').write_text(json.dumps(status, indent=2) + '\n')
+          (root / 'SHA256SUMS').write_text('\n'.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.relative_to(root).as_posix() for p in sorted(root.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS') + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('G0C native gates only: ' + json.dumps(status) + '\n')
+          PY
+      - name: Upload native diagnostics including failures
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: g0c-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-g0c-evidence/
+          if-no-files-found: error
+          retention-days: 14

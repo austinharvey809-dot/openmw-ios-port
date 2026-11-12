@@ -1,0 +1,190 @@
+{
+    "experiments/ios-openmw-data-smoke/src/DataCheck.mm":  {
+                                                               "text":  true,
+                                                               "sha256":  "9500ad894efdfdbade20ae28c48d91b56c4b2817781b5eb74637049aaf91e30c"
+                                                           },
+    "experiments/ios-openmw-nif-smoke/G0B-build5-review.md":  {
+                                                                  "text":  true,
+                                                                  "sha256":  "d6f9b769bbb1894756c067b1ba5a224ad7d886f27c8ceb3bbf11d07c3a730077"
+                                                              },
+    "experiments/ios-openmw-nif-smoke/data/triangle-candidate.bsa":  {
+                                                                         "text":  false,
+                                                                         "sha256":  "72adc5667e62f146d4bfa770b568b29b3f519def6cce1784a49f67c632058ec3"
+                                                                     },
+    "experiments/ios-openmw-nif-smoke/README.md":  {
+                                                       "text":  true,
+                                                       "sha256":  "b07efd6af8af47a9925ef7379b3c1fd2ea97c697ff61886ba28823777e0d7ea8"
+                                                   },
+    "experiments/ios-openmw-data-smoke/tools/package_ios.py":  {
+                                                                   "text":  true,
+                                                                   "sha256":  "00a242a6eb820b9b29eac445c6897fcc7e8b016799a874a6442c2862ec147d71"
+                                                               },
+    "experiments/ios-openmw-data-smoke/.gitignore":  {
+                                                         "text":  true,
+                                                         "sha256":  "32d84fbd013e1bad923fd03cdaaf415213d1919dcc892432e06aabb4aee9eac0"
+                                                     },
+    "experiments/ios-openmw-nif-smoke/G0B-build6-review.md":  {
+                                                                  "text":  true,
+                                                                  "sha256":  "2cb184d92b8d8c73a39ffade22d54f8924c6af127cf491aa91526929cce5a18f"
+                                                              },
+    "experiments/ios-openmw-nif-smoke/tools/audit_g0.py":  {
+                                                               "text":  true,
+                                                               "sha256":  "8678de5e033aab59fd6f79972828967c2c16698bf28f30a4e2c99aaad6c2e905"
+                                                           },
+    "experiments/ios-openmw-nif-smoke/tests/nif_parse_check.cpp":  {
+                                                                       "text":  true,
+                                                                       "sha256":  "2363cff3c8496655671fc02c1f89a3d2d9494be39b1359521bbb1d30c49e8cd8"
+                                                                   },
+    "experiments/ios-openmw-data-smoke/tools/ci_checks.py":  {
+                                                                 "text":  true,
+                                                                 "sha256":  "20d041da297ae43b05061791cce9aa3235eda481bf8b225472dd6e8695661c73"
+                                                             },
+    "experiments/ios-openmw-data-smoke/tools/test_data_app.py":  {
+                                                                     "text":  true,
+                                                                     "sha256":  "a084e9cc87b415807b3ff54486a326fa409425994f179cabe1f71b95af3b9cba"
+                                                                 },
+    "experiments/ios-openmw-data-smoke/tools/test_ci_workflow.py":  {
+                                                                        "text":  true,
+                                                                        "sha256":  "b865189d8300e4ccb94d78047bd034d7a532d12ef02effef777e76f0b9ff7e46"
+                                                                    },
+    "experiments/ios-openmw-data-smoke/Info.plist.in":  {
+                                                            "text":  true,
+                                                            "sha256":  "a70dc0e8a35f391d6ba21822000e50c25a66b173d661caeaee8db6bd2d9a7824"
+                                                        },
+    "experiments/ios-openmw-nif-smoke/CMakeLists.txt":  {
+                                                            "text":  true,
+                                                            "sha256":  "61fa56af2bc27a1a6966f9e32c60a221061322ed974b0a8b689163fde2671125"
+                                                        },
+    "experiments/ios-openmw-nif-smoke/tools/validate_build.py":  {
+                                                                     "text":  true,
+                                                                     "sha256":  "b90671dced61e674328521955a46d726db8197d97bdc0e5f84c75780a33b116f"
+                                                                 },
+    "experiments/ios-openmw-data-smoke/README.md":  {
+                                                        "text":  true,
+                                                        "sha256":  "5c6e5ea3d2db6d9115208d4bcdac8261793609995b4956f4b4245cb55363c07d"
+                                                    },
+    ".github/workflows/ios-openmw-data-smoke.yml":  {
+                                                        "text":  true,
+                                                        "sha256":  "8e5ed4989c3203c334d3423d1c19b2ffacac624d883e23dce9267651971d6418"
+                                                    },
+    "experiments/ios-openmw-nif-smoke/data/fixture-manifest.json":  {
+                                                                        "text":  true,
+                                                                        "sha256":  "1e4c21805e169a7d7b31930516cbfc91c4b771f5a01df57fcb024dc6f662b486"
+                                                                    },
+    "experiments/ios-openmw-data-smoke/src/DataProbe.hpp":  {
+                                                                "text":  true,
+                                                                "sha256":  "17d8a6395af5b7ddf7759e865f4c3d5b223fa59ac9a906ce726986ce9774d006"
+                                                            },
+    "experiments/ios-openmw-data-smoke/src/DataCheck.hpp":  {
+                                                                "text":  true,
+                                                                "sha256":  "d9d0ddf25c715358275e83559e864266db5234d3f4dc5fa731e898b81c907809"
+                                                            },
+    "experiments/ios-openmw-nif-smoke/data/triangle-candidate.nif":  {
+                                                                         "text":  false,
+                                                                         "sha256":  "0b77632dd08be22a3df33be66939065e4d467fa1231b9a12459f844224f846ff"
+                                                                     },
+    "experiments/ios-openmw-nif-smoke/data/truncated.nif":  {
+                                                                "text":  false,
+                                                                "sha256":  "66c8c54b1623a796f151c009a5c164da6f25250103a2e7aedc790bddd92fa63b"
+                                                            },
+    "experiments/ios-openmw-data-smoke/tools/test_package_ios.py":  {
+                                                                        "text":  true,
+                                                                        "sha256":  "276cb26b50b906ad5e2fddbe43daeab976aa248e1c5bf81365df4e5413fe64cb"
+                                                                    },
+    "experiments/ios-openmw-nif-smoke/data/invalid-header.nif":  {
+                                                                     "text":  false,
+                                                                     "sha256":  "772cba6c6370d6c0d0b23667026e3acb9de9c22f9f5a4fdc8b0dfee963b3a95b"
+                                                                 },
+    "experiments/ios-openmw-nif-smoke/data/invalid-header.bsa":  {
+                                                                     "text":  false,
+                                                                     "sha256":  "aa4b690a654334ab392417db891e67f93ca89dad975f636fbc9363ad86370c18"
+                                                                 },
+    "experiments/ios-openmw-nif-smoke/tools/run_host_cases.py":  {
+                                                                     "text":  true,
+                                                                     "sha256":  "797846da0c7eee4dc464287c4f494552bcd7e5511d672ff0e582fbac8bb562d8"
+                                                                 },
+    "experiments/ios-openmw-data-smoke/src/main.mm":  {
+                                                          "text":  true,
+                                                          "sha256":  "125f32e35480c0fcc415ac75d2181a3e86853415d47e168fb1af971d70c8dd3d"
+                                                      },
+    ".github/workflows/ios-openmw-nif-host-smoke.yml":  {
+                                                            "text":  true,
+                                                            "sha256":  "89200d6382eb475a353a026a7247bd90a8c281aed4446fb884b1b677f19fe989"
+                                                        },
+    "experiments/ios-openmw-data-smoke/tools/prepare_inputs.py":  {
+                                                                      "text":  true,
+                                                                      "sha256":  "72dd0174ce679331d21edc798fed774ac7373fc02a8d62c5fc1ce8228e5b77ad"
+                                                                  },
+    "experiments/ios-openmw-nif-smoke/G0B-build4-review.md":  {
+                                                                  "text":  true,
+                                                                  "sha256":  "3aa6b7f65bfc5f53f9879cad0e8c03bf7f48d0383c02ba2899631a8fc9bab811"
+                                                              },
+    "experiments/ios-openmw-nif-smoke/tools/prepare_bullet.py":  {
+                                                                     "text":  true,
+                                                                     "sha256":  "cf0e25b06799aa90cd192db3664cd1c6a6f6a8528a964ef3ae017a957d0b14fd"
+                                                                 },
+    "experiments/ios-openmw-nif-smoke/tools/inspect_private_assets.py":  {
+                                                                             "text":  true,
+                                                                             "sha256":  "0d2bd95559c79abec53c86bbf57e247f7d5bd5a24596233abfc85e8ce54ce1fe"
+                                                                         },
+    "experiments/ios-openmw-data-smoke/data/fixtures.json":  {
+                                                                 "text":  true,
+                                                                 "sha256":  "2106bae9deffd72a56dcd28d785f88a9132ae3141cd5513f70b698e2f95b26cc"
+                                                             },
+    "experiments/ios-openmw-nif-smoke/tools/generate_fixtures.py":  {
+                                                                        "text":  true,
+                                                                        "sha256":  "2e7943d971754246cb6e9580304e21e8afd1599d5bf88c67a5777eb03716c024"
+                                                                    },
+    "experiments/ios-openmw-nif-smoke/G0B-review.md":  {
+                                                           "text":  true,
+                                                           "sha256":  "06a7a9281b8a743e3d23bc2bed6ecedd0faedd4ce32e352b9f90bd7db6a20ee9"
+                                                       },
+    "experiments/ios-openmw-nif-smoke/data/nif-source-sha256.json":  {
+                                                                         "text":  true,
+                                                                         "sha256":  "64502146c426ec05b087db9c6b68b07dc77fbe618a3d969d977950c1c5d7a9f6"
+                                                                     },
+    "experiments/ios-openmw-nif-smoke/data/invalid-reference.nif":  {
+                                                                        "text":  false,
+                                                                        "sha256":  "55c27c3592f14f69feb1a665488294e015e0b1c7e6cb296023886d213131e4bb"
+                                                                    },
+    "experiments/ios-openmw-nif-smoke/G0A-readiness.md":  {
+                                                              "text":  true,
+                                                              "sha256":  "6070358998f1cda96939e9ddce65520bcdc240bc3865158593698c37e193b337"
+                                                          },
+    "experiments/ios-openmw-data-smoke/src/DataProbe.cpp":  {
+                                                                "text":  true,
+                                                                "sha256":  "20729d71a6ee6b3b4060ce2a180b0c7f43973a4d3eb755b6de69bcbcea66cf8c"
+                                                            },
+    "experiments/ios-openmw-nif-smoke/data/valid.esm":  {
+                                                            "text":  false,
+                                                            "sha256":  "48fdfa9d1aed2bb3d82169cd16574088373c4deaff3a39e9b40ea809157fcd9f"
+                                                        },
+    "experiments/ios-openmw-data-smoke/CMakeLists.txt":  {
+                                                             "text":  true,
+                                                             "sha256":  "bb998bafb62318735e87530f7e3a8693ec7296d866258ce0c576f4512cb550bc"
+                                                         },
+    "experiments/ios-openmw-nif-smoke/.gitignore":  {
+                                                        "text":  true,
+                                                        "sha256":  "27152d7a684f60e65630c02847191abe098d39984c29f6555b93fb0aa2ff1085"
+                                                    },
+    "experiments/ios-openmw-nif-smoke/data/invalid-reference.bsa":  {
+                                                                        "text":  false,
+                                                                        "sha256":  "aacba465160ee4c7e7bb5e20635a3bfb38df806bb9aa24601d0482085006e08a"
+                                                                    },
+    "experiments/ios-openmw-nif-smoke/data/missing-resource.bsa":  {
+                                                                       "text":  false,
+                                                                       "sha256":  "ecc6ad80b0bda91fc90200161d92b2f8786d996ead4a7d0c087f9f9afccc798b"
+                                                                   },
+    "experiments/ios-openmw-nif-smoke/tools/test_g0_ci.py":  {
+                                                                 "text":  true,
+                                                                 "sha256":  "bd6c63845837c86a2505133017d5fc8d346ddb4ef81cfb836490d05878900ea5"
+                                                             },
+    "experiments/ios-openmw-nif-smoke/data/truncated.bsa":  {
+                                                                "text":  false,
+                                                                "sha256":  "d48bc2bc014f99ff84ee12ae8ecc867f1ff05798b67524961c703cf7cbe590ed"
+                                                            },
+    "experiments/ios-openmw-data-smoke/data/prior-milestones.json":  {
+                                                                         "text":  true,
+                                                                         "sha256":  "cc117f8020b0eb876a63b1950ce1edd48a04032b2e28ff4077d10dd6e83cfb29"
+                                                                     }
+}
