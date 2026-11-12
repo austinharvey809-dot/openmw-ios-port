@@ -1,10 +1,43 @@
 # G0C: genuine NIF parsing on iPhoneOS — preparation
 
 Prepared 2026-11-11, branch `ios-port`. This isolated experiment is ready for
-manual source review. **No G0C iPhoneOS compilation, linking, bundle/IPA
-validation, installation or physical-device parsing has been performed.**
+manual source review. **Build #1 compiled and linked the iPhoneOS link-check
+executable, then failed to locate it for inspection. UIKit compilation,
+bundle/IPA validation, installation and physical-device parsing remain unverified.**
 Milestone F's physical iPhone data result is user-confirmed; G0B's host parsing
 result is independently confirmed below. Neither establishes G0C device parsing.
+
+## G0C Build #2 product-location correction
+
+Read-only inspection of [Build #1](https://github.com/austinharvey809-dot/openmw-ios-port/actions/runs/43130313400)
+confirms host validation and all thirteen original G0C regressions passed.
+The native job configured, compiled the genuine parser, and linked
+`<build>/openmw-nif-device-link-check.app/openmw-nif-device-link-check`.
+The verifier instead opened `<build>/openmw-nif-device-link-check`, raising
+`FileNotFoundError`. G0C0 inspection failed; G0C1–G0C3 were skipped.
+
+CMake now generates `g0c0-executable-$<CONFIG>.txt` containing
+`$<TARGET_FILE:openmw-nif-device-link-check>`. The single-configuration Unix
+Makefiles workflow explicitly selects Release, so it reads
+`g0c0-executable-Release.txt` after building. This derives the executable path
+from the actual target, including any automatic iPhoneOS `.app` wrapper,
+instead of encoding the runner path or assuming an unbundled product.
+Both the shell and Python reject missing, directory or symlink products;
+the existing ARM64/iOS/deployment/signature/SDK and otool inspections still run.
+File presence alone is never a successful gate.
+
+The later paths match the source configuration: the explicitly bundled
+`IOSOpenMWNifSmoke` target corresponds to `<build>/IOSOpenMWNifSmoke.app` and its
+contained executable. G0C2/G0C3 receive that app, and reopening receives the same
+IPA path supplied to packaging. No additional path error was independently
+demonstrated, so these paths are unchanged. Their execution remains unverified.
+
+Five added product-location regressions retain the original thirteen tests,
+for eighteen total. They cover target-derived workflow selection, missing and
+directory inputs, actual Mach-O inspection at a nested app executable, and
+host-macOS rejection. The existing mandatory-gate contract now also checks
+ordered, unconditional, fail-fast G0C0–G0C3 steps. These current Python tests and
+syntax checks remain unverified locally because the interpreter cannot launch.
 
 ## Completed G0B host evidence
 
@@ -144,9 +177,10 @@ dispatches another workflow, stages, commits or pushes.
 
 Python's WindowsApps alias still fails to launch; no local CMake, Apple SDK,
 C++/Objective-C++ compiler or compatible native parser is available. Therefore
-the new 13-test Python suite, Python syntax, configure/link, bundle and IPA
-validators are **unverified as executions**. The 46-test G0B pass is historical
-host evidence, not a new local or device result. New regression fixtures use
+the current 18-test Python suite, Python syntax, and the corrected G0C0 inspection
+are **unverified locally**. Build #1 provides native link evidence but did not
+complete inspection or later gates. The G0B host pass is host evidence, not a
+device result. New regression fixtures use
 synthetic Mach-O and JSON metadata only and cannot establish native acceptance.
 
 Available local PowerShell/Git Bash checks verify preserved hashes, exact G0B
@@ -158,11 +192,11 @@ graphics files) match; A–E hashes and the clean pinned OSG revision match.
 No private assets, upstream changes, new source dependencies, signing material,
 rendering implementation or system tools are introduced.
 
-Remaining risks require native evidence: compatibility of the original full
-OSG core/GLES2 build with the current iPhoneOS SDK, its Apple symbol-lookup
-branches, mutex-atomic configuration, any additional system dependency exposed
-by native linking, UIKit/Objective-C++ compilation, non-Xcode bundle placement,
-and SDK/TAPI/unsigned packaging behavior. No unknown dependency is allowed to
+Remaining risks require native evidence: inspection of the linked executable's
+SDK dependencies/signature/platform metadata, UIKit/Objective-C++ compilation,
+non-Xcode bundle placement, and SDK/TAPI/unsigned packaging behavior. Build #1
+has demonstrated compilation/linking of the OSG/OpenThreads/Bullet/parser
+closure, but has not completed its dependency inspection. No unknown dependency is allowed to
 silently pass. A confirmed blocker requiring upstream changes must be reported
 and reviewed rather than patched around with dummy headers or replacement code.
 
@@ -197,9 +231,9 @@ tools/test_g0c.py
 | Gate | Observed status |
 | --- | --- |
 | G0B macOS ARM64 parsing | PASS, independently verified Build #6 logs |
-| G0C offline Python regressions/syntax | Unverified locally: Python cannot launch |
-| iPhoneOS compilation | Unverified: Apple toolchain unavailable locally |
-| G0C0 iPhoneOS linking/dependencies | Unverified |
+| G0C offline Python regressions/syntax | Original 13 passed in Build #1; current 18/syntax unverified locally |
+| iPhoneOS parser/link-check compilation | PASS in Build #1 |
+| G0C0 iPhoneOS linking/dependencies | Link succeeded; corrected inspection pending |
 | G0C1 UIKit compilation/linking | Unverified |
 | G0C2 bundle verification | Unverified |
 | G0C3 IPA packaging/reopening | Unverified |

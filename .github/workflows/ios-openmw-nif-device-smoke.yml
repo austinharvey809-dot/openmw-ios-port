@@ -247,7 +247,10 @@ jobs:
         run: |
           set -euo pipefail
           cmake --build "$BUILD_DIR" --target openmw-nif-device-link-check --parallel 4 2>&1 | tee "$EVIDENCE/g0c0-link.log"
-          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/package_ios.py" link --product "$BUILD_DIR/openmw-nif-device-link-check" --sdk "$IPHONEOS_SDK" --evidence "$EVIDENCE/g0c0"
+          IFS= read -r G0C0_EXECUTABLE < "$BUILD_DIR/g0c0-executable-Release.txt"
+          test -f "$G0C0_EXECUTABLE"
+          test ! -L "$G0C0_EXECUTABLE"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/package_ios.py" link --product "$G0C0_EXECUTABLE" --sdk "$IPHONEOS_SDK" --evidence "$EVIDENCE/g0c0"
       - name: G0C1 UIKit application compilation and linking
         id: g0c1
         run: |

@@ -102,10 +102,70 @@ class SourceContracts(unittest.TestCase):
         for gate in ('g0c0', 'g0c1', 'g0c2', 'g0c3'):
             self.assertIn('id: ' + gate, workflow)
             self.assertIn('steps.' + gate + '.outcome', workflow)
+        native = workflow.split('  native-device:', 1)[1]
+        steps = native.split('      - name: ')[1:]
+        gates = [next(step for step in steps if '        id: ' + gate + '\n' in step)
+                 for gate in ('g0c0', 'g0c1', 'g0c2', 'g0c3')]
+        self.assertEqual([steps.index(step) for step in gates], sorted(steps.index(step) for step in gates))
+        for step in gates:
+            self.assertIn('set -euo pipefail', step)
+            self.assertNotIn('        if:', step)
         self.assertIn('needs: host-validation', workflow)
         self.assertIn('package_ios.py" reopen', workflow)
         self.assertNotIn('continue-on-error:', workflow)
         self.assertIn("physical_device_execution='not-performed'", workflow)
+
+
+class LinkProductContracts(unittest.TestCase):
+    def test_workflow_reads_cmake_target_file_and_checks_regular_executable(self):
+        cmake = (ROOT / 'CMakeLists.txt').read_text()
+        self.assertIn('file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/g0c0-executable-$<CONFIG>.txt"', cmake)
+        self.assertIn('CONTENT "$<TARGET_FILE:openmw-nif-device-link-check>\\n")', cmake)
+        workflow = (REPO / '.github/workflows/ios-openmw-nif-device-smoke.yml').read_text()
+        step = workflow.split('        id: g0c0\n', 1)[1].split('      - name:', 1)[0]
+        self.assertIn('-DCMAKE_BUILD_TYPE=Release', workflow)
+        commands = ('cmake --build "$BUILD_DIR" --target openmw-nif-device-link-check',
+                    'IFS= read -r G0C0_EXECUTABLE < "$BUILD_DIR/g0c0-executable-Release.txt"',
+                    'test -f "$G0C0_EXECUTABLE"', 'test ! -L "$G0C0_EXECUTABLE"',
+                    'link --product "$G0C0_EXECUTABLE" --sdk "$IPHONEOS_SDK"')
+        self.assertEqual([step.index(command) for command in commands], sorted(step.index(command) for command in commands))
+        self.assertNotIn('--product "$BUILD_DIR/openmw-nif-device-link-check"', step)
+
+    def test_missing_product_rejected_before_macho_inspection(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(package, 'device_binary') as inspector:
+            with self.assertRaisesRegex(ValueError, 'existing regular file'):
+                package.inspect_link(Path(directory) / 'missing', None)
+            inspector.assert_not_called()
+
+    def test_directory_in_place_of_executable_rejected(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(package, 'device_binary') as inspector:
+            with self.assertRaisesRegex(ValueError, 'existing regular file'):
+                package.inspect_link(Path(directory), None)
+            inspector.assert_not_called()
+
+    def test_nested_app_executable_still_runs_real_macho_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            product = Path(directory) / 'openmw-nif-device-link-check.app/openmw-nif-device-link-check'
+            product.parent.mkdir()
+            data = binary()
+            product.write_bytes(data)
+            with patch.object(package, 'device_binary', wraps=package.device_binary) as inspector, \
+                    patch.object(package.core, 'inspect_dependencies', return_value={}) as otool:
+                report, _ = package.inspect_link(product, None)
+                inspector.assert_called_once_with(data, None)
+                otool.assert_called_once_with(product.parent, report)
+            self.assertEqual(report['binaries'][product.name]['platform'], 'IOS')
+            self.assertEqual(report['sha256'], sha(data))
+            self.assertIn('no runtime claim', report['scope'])
+
+    def test_existing_host_macos_file_cannot_pass_link_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            product = Path(directory) / 'host-executable'
+            product.write_bytes(binary(platform=1))
+            with patch.object(package.core, 'inspect_dependencies') as otool:
+                with self.assertRaises((ValueError, package.core.ValidationError)):
+                    package.inspect_link(product, None)
+                otool.assert_not_called()
 
 
 class NativeMetadataContracts(unittest.TestCase):

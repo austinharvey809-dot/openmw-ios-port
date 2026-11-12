@@ -44,6 +44,16 @@ def device_binary(data, sdk=None):
     return details, dependencies
 
 
+def inspect_link(product, sdk):
+    require(product.is_file() and not product.is_symlink(), 'Link product must be an existing regular file')
+    data = product.read_bytes()
+    binary, dependencies = device_binary(data, sdk)
+    report = {'valid': True, 'binaries': {product.name: binary}, 'dependencies': dependencies,
+              'sha256': sha(data), 'scope': 'G0C0 device link; no runtime claim'}
+    outputs = core.inspect_dependencies(product.parent, report)
+    return report, outputs
+
+
 def prepared_resources(prepared):
     files = tree(prepared / 'resources')
     metadata = f.json_object(files['nif-build.json'], 'G0C provenance')
@@ -147,10 +157,7 @@ def main():
     try:
         core.check_sdk(args.sdk)
         if args.phase == 'link':
-            binary, dependencies = device_binary(args.product.read_bytes(), args.sdk)
-            report = {'valid': True, 'binaries': {args.product.name: binary}, 'dependencies': dependencies,
-                      'sha256': sha(args.product.read_bytes()), 'scope': 'G0C0 device link; no runtime claim'}
-            outputs = core.inspect_dependencies(args.product.parent, report)
+            report, outputs = inspect_link(args.product, args.sdk)
         elif args.phase == 'reopen':
             report = validate_ipa(args.product, args.prepared, args.sdk)
             outputs = {}

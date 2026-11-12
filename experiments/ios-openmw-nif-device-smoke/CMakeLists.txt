@@ -38,6 +38,9 @@ set_target_properties(g0c-nif-parser PROPERTIES CXX_EXTENSIONS OFF)
 # The unchanged G0B main is also linked as a real iPhoneOS executable (G0C0).
 add_executable(openmw-nif-device-link-check "${CMAKE_CURRENT_SOURCE_DIR}/../ios-openmw-nif-smoke/tests/nif_parse_check.cpp")
 target_link_libraries(openmw-nif-device-link-check PRIVATE g0c-nif-parser)
+# iPhoneOS may wrap even this link-check target in an .app. Export the actual binary.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/g0c0-executable-$<CONFIG>.txt"
+    CONTENT "$<TARGET_FILE:openmw-nif-device-link-check>\n")
 set(_prepared "${CMAKE_CURRENT_BINARY_DIR}/prepared")
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/prepare.py" prepare
     --osg-source "${OPENMW_ESM_OSG_SOURCE}" --generated "${G0C_OSG_INCLUDE}"
