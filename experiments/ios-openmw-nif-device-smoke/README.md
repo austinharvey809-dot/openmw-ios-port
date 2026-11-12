@@ -1,11 +1,69 @@
 # G0C: genuine NIF parsing on iPhoneOS — preparation
 
 Prepared 2026-11-11, branch `ios-port`. This isolated experiment is ready for
-manual source review. **Build #1 compiled and linked the iPhoneOS link-check
-executable, then failed to locate it for inspection. UIKit compilation,
-bundle/IPA validation, installation and physical-device parsing remain unverified.**
+manual source review. **Build #2 passed native executable inspection and UIKit
+compilation/linking. G0C2 stopped on the CoreFoundation allowlist entry;
+G0C3 packaging, installation and physical-device parsing have not passed.**
 Milestone F's physical iPhone data result is user-confirmed; G0B's host parsing
 result is independently confirmed below. Neither establishes G0C device parsing.
+
+## G0C Build #3 CoreFoundation validation correction
+
+Read-only inspection of [Build #2](https://github.com/austinharvey809-dot/openmw-ios-port/actions/runs/43132658075),
+commit `63091de1884b1bca268c2f8a078210adb4ebd7ec`, confirms host validation,
+all eighteen then-current G0C tests, configuration, G0C0 inspection, and G0C1
+UIKit compilation/linking succeeded. G0C2 failed in `device_binary()` while
+iterating dependency names parsed by the reused Mach-O reader from the actual
+`IOSOpenMWNifSmoke` executable:
+
+```text
+Unexpected dependency: /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+```
+
+This is direct load-command evidence for that exact framework path, rather
+than an inference from imports or an observed compiler/linker failure. The
+explicit allowlist omitted it. The only production-code change adds
+`CoreFoundation` to that framework-name tuple. Accepted frameworks are now
+exactly UIKit, Foundation, CoreFoundation and OpenGLES. The existing three
+runtime dylib paths remain exactly `/usr/lib/libc++.1.dylib`,
+`/usr/lib/libSystem.B.dylib`, and `/usr/lib/libobjc.A.dylib`. UIKit and Foundation
+are still mandatory for the full app. This does not authorize arbitrary Apple
+frameworks or any arbitrary `/usr/lib` path.
+
+CoreFoundation still passes through F's unchanged `system_dependency()` helper:
+it must have a matching selected-iPhoneOS-SDK TAPI stub, supported ARM64 device
+target and matching install name; an ARM64e-only stub still requires the
+existing real ARM64 linker probe. CLI SDK checks, Mach-O architecture/platform,
+exact iOS 18.0 minimum, signature/RPATH rejection, bundle identity/inventory,
+resource/provenance checks and independent IPA reopening are unchanged.
+
+The native artifact listing identifies `13906615857` (`g0c-native-43132658075-1`,
+649,839 bytes), reported SHA-256
+`8bf72c0850ab8f4e6b608e4fb23ed7e5e138aaf9136cb8f23deb1df988842d04`.
+Its ZIP contents were not inspected locally. The current collector retains the
+link-check executable, prepared resources and configuration diagnostics, not
+the UIKit executable. The available logs do not print its complete load-command
+dependency list, so that full list remains unverified. No other framework is
+added without specific evidence.
+
+The source audit also reviewed G0C2/G0C3 resource inventory, plist/executable
+placement, generated-header/license/Bullet provenance, ZIP roots/modes and
+reopening. G0C2 reached native dependency inspection after the preceding bundle
+checks; the later embedded-metadata-hash check and G0C3 remain unverified. No
+other independently demonstrated packaging defect was found, and the working
+compilation recipe and workflow are unchanged.
+
+Seven new synthetic-Mach-O/SDK policy tests retain all eighteen existing tests
+(twenty-five total). They cover the exact CoreFoundation path with real helper
+execution against synthetic iPhoneOS TAPI metadata; missing/host/simulator SDK
+stubs; previous permitted dependencies; unknown/host/third-party rejection;
+RPATH, architecture, platform, minimum and signing rejection; required
+UIKit/Foundation; and repeated full binary inspection during bundle validation
+and both IPA reopening paths. These are policy tests, not native execution
+proof. Current Python tests/syntax remain unverified locally because Python
+cannot launch. PowerShell preservation/fixture audits, shell syntax and Git
+whitespace checks pass. Build #3 is prepared for manual review only: G0C2,
+G0C3 and physical-device execution are not claimed successful.
 
 ## G0C Build #2 product-location correction
 
@@ -82,7 +140,7 @@ logs, build outputs, IPAs and exported phone diagnostics belong in that director
 | OSG | Exact `OpenMW/osg` revision `9b384d5439977784e5cd250ff8ff7966928ddd27`; static `osg` core and OpenThreads; no osgDB, viewer, plugins or ANGLE targets |
 | Bullet | Exact 3.25 URL/SHA-512 and existing G0B acquisition/provenance recipe; static BulletCollision then LinearMath, with `BT_USE_DOUBLE_PRECISION` on libraries and consumer |
 | Language/platform | AppleClang, real iPhoneOS SDK, ARM64, C++20, minimum iOS exactly 18.0; macOS/simulator binaries rejected |
-| Apple system linkage | libc++/libSystem and any emitted libobjc dependency; UIKit/Foundation for app; SDK OpenGLES for original OSG core linkage |
+| Apple system linkage | Exact libc++/libSystem/libobjc paths; UIKit/Foundation for app; confirmed CoreFoundation load command; SDK OpenGLES for original OSG core linkage |
 | Generated configuration | Real OSG/OpenThreads templates; Config/Version for both, osg/GL; generated include directory precedes D's math-only Config and reaches parser consumers |
 | Packaging | Reuse F's read-only ARM64/iOS Mach-O, SDK TAPI availability, otool agreement, file collector and ZIP writer helpers through a separate module instance; F files stay unchanged |
 
@@ -177,9 +235,9 @@ dispatches another workflow, stages, commits or pushes.
 
 Python's WindowsApps alias still fails to launch; no local CMake, Apple SDK,
 C++/Objective-C++ compiler or compatible native parser is available. Therefore
-the current 18-test Python suite, Python syntax, and the corrected G0C0 inspection
-are **unverified locally**. Build #1 provides native link evidence but did not
-complete inspection or later gates. The G0B host pass is host evidence, not a
+the current 25-test Python suite, Python syntax, and corrected bundle/IPA checks
+are **unverified locally**. Build #2 provides G0C0 inspection and UIKit linking
+evidence, but stopped during bundle dependency policy validation. The G0B host pass is host evidence, not a
 device result. New regression fixtures use
 synthetic Mach-O and JSON metadata only and cannot establish native acceptance.
 
@@ -192,11 +250,10 @@ graphics files) match; A–E hashes and the clean pinned OSG revision match.
 No private assets, upstream changes, new source dependencies, signing material,
 rendering implementation or system tools are introduced.
 
-Remaining risks require native evidence: inspection of the linked executable's
-SDK dependencies/signature/platform metadata, UIKit/Objective-C++ compilation,
-non-Xcode bundle placement, and SDK/TAPI/unsigned packaging behavior. Build #1
-has demonstrated compilation/linking of the OSG/OpenThreads/Bullet/parser
-closure, but has not completed its dependency inspection. No unknown dependency is allowed to
+Remaining risks require native evidence: the corrected full-app dependency
+inspection, remaining bundle checks, and SDK/TAPI/unsigned IPA packaging and
+reopening behavior. Build #2 demonstrated G0C0 inspection and complete UIKit
+compilation/linking. No unknown dependency is allowed to
 silently pass. A confirmed blocker requiring upstream changes must be reported
 and reviewed rather than patched around with dummy headers or replacement code.
 
@@ -231,12 +288,12 @@ tools/test_g0c.py
 | Gate | Observed status |
 | --- | --- |
 | G0B macOS ARM64 parsing | PASS, independently verified Build #6 logs |
-| G0C offline Python regressions/syntax | Original 13 passed in Build #1; current 18/syntax unverified locally |
-| iPhoneOS parser/link-check compilation | PASS in Build #1 |
-| G0C0 iPhoneOS linking/dependencies | Link succeeded; corrected inspection pending |
-| G0C1 UIKit compilation/linking | Unverified |
-| G0C2 bundle verification | Unverified |
-| G0C3 IPA packaging/reopening | Unverified |
+| G0C offline Python regressions/syntax | 18 passed in Build #2; current 25/syntax unverified locally |
+| iPhoneOS parser/link-check compilation | PASS in Build #2 |
+| G0C0 iPhoneOS linking/dependencies | PASS in Build #2 |
+| G0C1 UIKit compilation/linking | PASS in Build #2 |
+| G0C2 bundle verification | Failed on CoreFoundation policy; correction pending native verification |
+| G0C3 IPA packaging/reopening | Not run |
 | Signing/install/device execution | Not performed |
 
 ## Next manual steps

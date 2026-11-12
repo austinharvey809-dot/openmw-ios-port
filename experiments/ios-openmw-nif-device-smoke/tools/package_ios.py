@@ -20,7 +20,7 @@ PREFIX = 'Payload/' + APP_NAME + '/'
 f.APP_NAME, f.EXECUTABLE, f.PREFIX = APP_NAME, EXECUTABLE, PREFIX
 collect_bundle, write_ipa = f.collect_bundle, f.write_ipa
 FRAMEWORKS = {'/System/Library/Frameworks/' + name + '.framework/' + name
-              for name in ('UIKit', 'Foundation', 'OpenGLES')}
+              for name in ('UIKit', 'Foundation', 'CoreFoundation', 'OpenGLES')}
 
 
 def device_binary(data, sdk=None):

@@ -212,6 +212,122 @@ class NativeMetadataContracts(unittest.TestCase):
                 package.validate_bundle(wrong, Path('.'))
 
 
+class DependencyValidationContracts(unittest.TestCase):
+    """Synthetic load commands and SDK stubs exercise policy, never native execution."""
+
+    CORE_FOUNDATION = '/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation'
+    UIKIT = '/System/Library/Frameworks/UIKit.framework/UIKit'
+    FOUNDATION = '/System/Library/Frameworks/Foundation.framework/Foundation'
+
+    def sdk(self, root, names, targets='arm64-ios'):
+        sdk = root / 'iPhoneOS.sdk'
+        sdk.mkdir(exist_ok=True)
+        (sdk / 'SDKSettings.plist').write_bytes(plistlib.dumps({'CanonicalName': 'iphoneos26.0'}))
+        for name in names:
+            binary_path = sdk / name.lstrip('/')
+            stub = binary_path.with_suffix('.tbd') if binary_path.suffix == '.dylib' else Path(str(binary_path) + '.tbd')
+            stub.parent.mkdir(parents=True, exist_ok=True)
+            stub.write_text("--- !tapi-tbd\ntbd-version: 4\ntargets: [ " + targets + " ]\ninstall-name: '" + name + "'\n...\n",
+                            encoding='utf-8')
+        return sdk
+
+    def bundle(self, dependencies, **options):
+        resources = {'nif-build.json': b'{}', 'Fixtures/test.dat': b'synthetic dependency-policy fixture'}
+        text = (ROOT / 'Info.plist.in').read_text(encoding='utf-8')
+        text = text.replace('${MACOSX_BUNDLE_EXECUTABLE_NAME}', package.EXECUTABLE)
+        text = text.replace('${MACOSX_BUNDLE_GUI_IDENTIFIER}', package.BUNDLE_ID)
+        files = {name: package.Entry(data, stat.S_IFREG | 0o644) for name, data in resources.items()}
+        files['Info.plist'] = package.Entry(plistlib.dumps(plistlib.loads(text.encode('utf-8'))), stat.S_IFREG | 0o644)
+        files[package.EXECUTABLE] = package.Entry(binary(dependencies=dependencies, **options) + sha(b'{}').encode(),
+                                                stat.S_IFREG | 0o755)
+        return files, resources
+
+    def test_corefoundation_requires_and_accepts_real_sdk_policy(self):
+        name = self.CORE_FOUNDATION
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = self.sdk(Path(directory), [name])
+            with patch.object(package.core, 'system_dependency', wraps=package.core.system_dependency) as verifier:
+                details, evidence = package.device_binary(binary(dependencies=[name]), sdk)
+                verifier.assert_called_once_with(name, sdk, '18.0')
+            self.assertEqual(details['dependencies'], [name])
+            self.assertEqual(evidence[0]['kind'], 'iphoneos-sdk')
+
+    def test_corefoundation_missing_or_host_sdk_stub_is_rejected(self):
+        name = self.CORE_FOUNDATION
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = self.sdk(root, [])
+            with self.assertRaises(package.core.ValidationError):
+                package.device_binary(binary(dependencies=[name]), sdk)
+            for target in ('arm64-macos', 'arm64-ios-simulator'):
+                with self.subTest(target=target):
+                    self.sdk(root, [name], targets=target)
+                    with self.assertRaises(package.core.ValidationError):
+                        package.device_binary(binary(dependencies=[name]), sdk)
+
+    def test_exact_allowlist_and_previous_dependencies_remain_accepted(self):
+        frameworks = {'/System/Library/Frameworks/' + name + '.framework/' + name
+                      for name in ('UIKit', 'Foundation', 'CoreFoundation', 'OpenGLES')}
+        self.assertEqual(package.FRAMEWORKS, frameworks)
+        names = sorted(frameworks) + ['/usr/lib/libc++.1.dylib', '/usr/lib/libSystem.B.dylib', '/usr/lib/libobjc.A.dylib']
+        with tempfile.TemporaryDirectory() as directory:
+            sdk = self.sdk(Path(directory), names)
+            for name in names:
+                with self.subTest(name=name):
+                    details, evidence = package.device_binary(binary(dependencies=[name]), sdk)
+                    self.assertEqual(details['dependencies'], [name])
+                    self.assertEqual(evidence[0]['kind'], 'iphoneos-sdk')
+
+    def test_unknown_framework_host_dylib_and_third_party_runtime_rejected(self):
+        for name in ('/System/Library/Frameworks/Unknown.framework/Unknown',
+                     '/System/Library/Frameworks/AppKit.framework/AppKit', '/usr/lib/libUnexpected.dylib',
+                     '/opt/homebrew/lib/libosg.dylib', '@rpath/libEGL.dylib',
+                     '/Library/Frameworks/ANGLE.framework/ANGLE'):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                package.device_binary(binary(dependencies=[self.CORE_FOUNDATION, name]))
+
+    def test_corefoundation_does_not_relax_native_metadata_or_signature_rules(self):
+        path = b'@executable_path/Frameworks\0'
+        size = (12 + len(path) + 7) & ~7
+        rpath = struct.pack('<III', 0x8000001c, size, 12) + path + bytes(size - 12 - len(path))
+        signature = struct.pack('<4I', 0x1d, 16, 0, 0)
+        for options in ({'cpu': 0x01000007}, {'platform': 1}, {'platform': 7},
+                        {'minimum': 17 << 16}, {'minimum': 19 << 16},
+                        {'extra': [rpath]}, {'extra': [signature]}):
+            with self.subTest(options=options), self.assertRaises((ValueError, package.core.ValidationError)):
+                package.device_binary(binary(dependencies=[self.CORE_FOUNDATION], **options))
+
+    def test_full_application_still_requires_both_uikit_and_foundation(self):
+        for missing in (self.UIKIT, self.FOUNDATION):
+            with self.subTest(missing=missing):
+                names = [name for name in (self.UIKIT, self.FOUNDATION, self.CORE_FOUNDATION) if name != missing]
+                files, resources = self.bundle(names)
+                with patch.object(package, 'prepared_resources', return_value=(resources, {'source_commit': 'a' * 40})):
+                    with self.assertRaisesRegex(ValueError, 'Missing UIKit/Foundation'):
+                        package.validate_bundle(files, Path('.'))
+
+    def test_bundle_and_independent_ipa_reopening_revalidate_native_dependencies(self):
+        names = [self.UIKIT, self.FOUNDATION, self.CORE_FOUNDATION]
+        files, resources = self.bundle(names)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = self.sdk(root, names)
+            with patch.object(package, 'prepared_resources', return_value=(resources, {'source_commit': 'a' * 40})), \
+                    patch.object(package, 'device_binary', wraps=package.device_binary) as inspector:
+                self.assertTrue(package.validate_bundle(files, root, sdk)['valid'])
+                ipa = root / 'synthetic.ipa'
+                package.write_ipa(files, ipa)
+                self.assertTrue(package.validate_ipa(ipa, root, sdk, expected=files)['valid'])
+                self.assertTrue(package.validate_ipa(ipa, root, sdk)['valid'])
+                self.assertEqual(inspector.call_count, 3)
+                self.assertTrue(all(call.args == (files[package.EXECUTABLE].data, sdk)
+                                    for call in inspector.call_args_list))
+                bad, _ = self.bundle(names + ['/System/Library/Frameworks/Unknown.framework/Unknown'])
+                package.write_ipa(bad, ipa)
+                with self.assertRaisesRegex(ValueError, 'Unexpected dependency'):
+                    package.validate_ipa(ipa, root, sdk)
+
+
 class PhoneEvidenceContracts(unittest.TestCase):
     def test_consistent_synthetic_result_contract(self):
         self.assertTrue(verify_result.validate(result_fixture(), 'a' * 40)['valid'])
