@@ -1,0 +1,166 @@
+name: iOS OpenMW G1A owned NIF geometry host foundation
+
+# Manual review/run only. No rendering, app packaging, or device installation.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPERIMENT: experiments/ios-openmw-nif-render-smoke
+  OPENMW_SOURCE: ${{ github.workspace }}/openmw
+  OPENMW_ESM_OSG_SOURCE: ${{ github.workspace }}/osg-pinned
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  host-geometry:
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize failure evidence before checkout
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-g1a-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-g1a-build"
+          BULLET_ROOT="$RUNNER_TEMP/openmw-g1a-bullet"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\nBULLET_ROOT=%s\n' \
+            "$EVIDENCE" "$BUILD_DIR" "$BULLET_ROOT" >> "$GITHUB_ENV"
+          printf 'Requested %s at %s\n' "$GITHUB_REF" "$GITHUB_SHA" > "$EVIDENCE/request.txt"
+
+      - name: Check out requested source and read-only baseline history
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: openmw
+          fetch-depth: 0
+          submodules: false
+          lfs: false
+          persist-credentials: false
+
+      - name: Check out exact pinned OSG source
+        uses: actions/checkout@v6
+        with:
+          repository: OpenMW/osg
+          ref: 9b384d5439977784e5cd250ff8ff7966928ddd27
+          path: osg-pinned
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          persist-credentials: false
+
+      - name: Verify host, preservation, source and fixture contracts
+        id: sources
+        run: |
+          set -euo pipefail
+          {
+            test "$GITHUB_REF" = refs/heads/ios-port
+            test "$(git -C "$OPENMW_SOURCE" rev-parse HEAD)" = "$GITHUB_SHA"
+            test "$(uname -m)" = arm64
+            sw_vers
+            xcodebuild -version
+            xcrun --sdk macosx clang++ --version
+            cmake --version
+            python3 --version
+          } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/contracts.py" \
+            --osg-source "$OPENMW_ESM_OSG_SOURCE" > "$EVIDENCE/source-audit.json" \
+            2> "$EVIDENCE/source-audit-errors.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/$EXPERIMENT/tools" -p test_g1a.py -v \
+            2>&1 | tee "$EVIDENCE/offline-tests.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/experiments/ios-openmw-nif-smoke/tools" -p test_g0_ci.py -v \
+            2>&1 | tee "$EVIDENCE/g0b-regressions.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/experiments/ios-openmw-nif-device-smoke/tools" -p test_g0c.py -v \
+            2>&1 | tee "$EVIDENCE/g0c-regressions.log"
+
+      - name: Acquire and verify unchanged Bullet 3.25 source
+        id: bullet
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/experiments/ios-openmw-nif-smoke/tools/prepare_bullet.py" --download \
+            --output "$BULLET_ROOT" --evidence "$EVIDENCE" 2>&1 | tee "$EVIDENCE/bullet-acquisition.log"
+
+      - name: Configure single-provider native geometry foundation
+        id: configure
+        run: |
+          set -euo pipefail
+          cmake -S "$OPENMW_SOURCE/$EXPERIMENT" -B "$BUILD_DIR" -G 'Unix Makefiles' \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+            -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" \
+            -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_CXX_COMPILER="$(xcrun --sdk macosx --find clang++)" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tee "$EVIDENCE/configure.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/contracts.py" --osg-source "$OPENMW_ESM_OSG_SOURCE" \
+            --build "$BUILD_DIR" --bullet-source "$BULLET_ROOT/source" > "$EVIDENCE/configured-audit.json" \
+            2> "$EVIDENCE/configured-audit-errors.log"
+
+      - name: Compile and inspect actual ARM64 host products
+        id: build
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --target openmw-nif-geometry-check openmw-nif-parse-check --parallel 4 \
+            2>&1 | tee "$EVIDENCE/build.log"
+          test "$(wc -l < "$BUILD_DIR/g1a-products-Release.txt")" -eq 2
+          while IFS= read -r product; do
+            test -f "$product" && test -x "$product" && test ! -L "$product"
+            test "$(xcrun lipo -archs "$product")" = arm64
+            shasum -a 256 "$product" >> "$EVIDENCE/executables-sha256.txt"
+            otool -L "$product" >> "$EVIDENCE/executable-dependencies.txt"
+          done < "$BUILD_DIR/g1a-products-Release.txt"
+
+      - name: Execute owned geometry and all six genuine parser cases
+        id: runtime
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$BUILD_DIR" -R '^g1a-owned-geometry-and-six-parser-cases$' \
+            --output-on-failure -V 2>&1 | tee "$EVIDENCE/native-tests.log"
+
+      - name: Retain diagnostics and separate gate outcomes even on failure
+        if: always()
+        env:
+          SOURCE_GATE: ${{ steps.sources.outcome }}
+          BULLET_GATE: ${{ steps.bullet.outcome }}
+          CONFIGURE_GATE: ${{ steps.configure.outcome }}
+          BUILD_GATE: ${{ steps.build.outcome }}
+          RUNTIME_GATE: ${{ steps.runtime.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          evidence = Path(os.environ['EVIDENCE'])
+          build = Path(os.environ['BUILD_DIR'])
+          evidence.mkdir(parents=True, exist_ok=True)
+          if build.is_dir():
+              for path in build.rglob('*'):
+                  if path.is_file() and (path.name in {'CMakeCache.txt', 'compile_commands.json',
+                          'CMakeConfigureLog.yaml', 'CMakeError.log', 'CMakeOutput.log',
+                          'g1a-products-Release.txt', 'openmw-nif-geometry-check', 'openmw-nif-parse-check'}
+                          or 'evidence' in path.relative_to(build).parts
+                          or path.parent.name == 'generated'):
+                      target = evidence / 'build' / path.relative_to(build)
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(path, target)
+          status = {'gates': {name: os.environ.get(name, 'not-run') for name in
+                    ('SOURCE_GATE', 'BULLET_GATE', 'CONFIGURE_GATE', 'BUILD_GATE', 'RUNTIME_GATE')},
+                    'gpu_rendering': 'not-performed', 'iphoneos_build': 'not-performed',
+                    'ipa_packaging': 'not-performed', 'physical_device': 'not-performed'}
+          (evidence / 'job-status.json').write_text(json.dumps(status, indent=2) + '\n')
+          (evidence / 'SHA256SUMS').write_text('\n'.join(hashlib.sha256(p.read_bytes()).hexdigest()
+              + '  ' + p.relative_to(evidence).as_posix() for p in sorted(evidence.rglob('*'))
+              if p.is_file() and p.name != 'SHA256SUMS') + '\n')
+          PY
+
+      - name: Upload host-only evidence including failures
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: openmw-g1a-host-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-g1a-evidence/
+          if-no-files-found: error
+          retention-days: 14

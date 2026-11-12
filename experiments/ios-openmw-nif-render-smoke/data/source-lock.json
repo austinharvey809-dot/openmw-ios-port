@@ -1,0 +1,162 @@
+{
+    "schema_version":  1,
+    "osg_revision":  "9b384d5439977784e5cd250ff8ff7966928ddd27",
+    "graphics_overlay_version":  2,
+    "graphics_baseline_commit":  "8799e90148c3ea1985b2547fa8e9b31be19b45c2",
+    "angle_revision":  "6ea96bcca6d7f05199f5565c6d5c4722af7269da",
+    "preparation_source_commit":  "22f267edd49f191ec1c29eed28368f8093c49d7a",
+    "bullet_url":  "https://github.com/bulletphysics/bullet3/archive/refs/tags/3.25.tar.gz",
+    "fixtures":  {
+                     "invalid-reference.bsa":  {
+                                                   "sha256":  "aacba465160ee4c7e7bb5e20635a3bfb38df806bb9aa24601d0482085006e08a",
+                                                   "size":  440
+                                               },
+                     "invalid-reference.nif":  {
+                                                   "sha256":  "55c27c3592f14f69feb1a665488294e015e0b1c7e6cb296023886d213131e4bb",
+                                                   "size":  392
+                                               },
+                     "triangle-candidate.nif":  {
+                                                    "sha256":  "0b77632dd08be22a3df33be66939065e4d467fa1231b9a12459f844224f846ff",
+                                                    "size":  392
+                                                },
+                     "triangle-candidate.bsa":  {
+                                                    "sha256":  "72adc5667e62f146d4bfa770b568b29b3f519def6cce1784a49f67c632058ec3",
+                                                    "size":  440
+                                                },
+                     "nif-source-sha256.json":  {
+                                                    "sha256":  "64502146c426ec05b087db9c6b68b07dc77fbe618a3d969d977950c1c5d7a9f6",
+                                                    "size":  7646
+                                                },
+                     "missing-resource.bsa":  {
+                                                  "sha256":  "ecc6ad80b0bda91fc90200161d92b2f8786d996ead4a7d0c087f9f9afccc798b",
+                                                  "size":  58
+                                              },
+                     "invalid-header.nif":  {
+                                                "sha256":  "772cba6c6370d6c0d0b23667026e3acb9de9c22f9f5a4fdc8b0dfee963b3a95b",
+                                                "size":  392
+                                            },
+                     "invalid-header.bsa":  {
+                                                "sha256":  "aa4b690a654334ab392417db891e67f93ca89dad975f636fbc9363ad86370c18",
+                                                "size":  440
+                                            },
+                     "truncated.nif":  {
+                                           "sha256":  "66c8c54b1623a796f151c009a5c164da6f25250103a2e7aedc790bddd92fa63b",
+                                           "size":  375
+                                       },
+                     "valid.esm":  {
+                                       "sha256":  "48fdfa9d1aed2bb3d82169cd16574088373c4deaff3a39e9b40ea809157fcd9f",
+                                       "size":  376
+                                   },
+                     "fixture-manifest.json":  {
+                                                   "sha256":  "1e4c21805e169a7d7b31930516cbfc91c4b771f5a01df57fcb024dc6f662b486",
+                                                   "size":  1611
+                                               },
+                     "truncated.bsa":  {
+                                           "sha256":  "d48bc2bc014f99ff84ee12ae8ecc867f1ff05798b67524961c703cf7cbe590ed",
+                                           "size":  423
+                                       }
+                 },
+    "graphics_baseline_files":  {
+                                    "experiments/ios-osg-smoke/tools/test_package_ios.py":  {
+                                                                                                "git_blob":  "33f533951800a4a54c63410ce8276ffa6bdb12e3",
+                                                                                                "sha256":  "8080a098f86a85783d5db463eef7da1c33796af1131aadd084a43b4a6b3e53a2"
+                                                                                            },
+                                    "experiments/ios-osg-smoke/tools/test_integration.py":  {
+                                                                                                "git_blob":  "cdd810b832bb19fbcca01255cdd95949ee0f1a07",
+                                                                                                "sha256":  "1f884bd58be1dab1b3ad13e946b87ade3f4cd4ff8de7b6dad01d26d045ca8aeb"
+                                                                                            },
+                                    "experiments/ios-osg-smoke/src/main.mm":  {
+                                                                                  "git_blob":  "ce481b5ff10bf6994877537b0c8e2dad43ce8915",
+                                                                                  "sha256":  "8f3db6f97e6b74d1afb4a3b69021ffd4855336a35639a2aa0cd8c6aa8683e217"
+                                                                              },
+                                    "experiments/ios-osg-smoke/.gitignore":  {
+                                                                                 "git_blob":  "ee85489d7f18a8224613ea4459985f3266d4cae6",
+                                                                                 "sha256":  "f2b37c529788d55d97a60f04ac7147cb434e8af6d50057fd678550cab5e2bf7b"
+                                                                             },
+                                    "experiments/ios-osg-smoke/tools/prepare_osg.py":  {
+                                                                                           "git_blob":  "a54c6f975263b0021ca3dabd4194d3f2cc796a42",
+                                                                                           "sha256":  "517cfa236cb792fa3cd260c15a02a4b42972953981d9855076bd5763c1b8d156"
+                                                                                       },
+                                    "experiments/ios-osg-smoke/tools/check_osg_source.py":  {
+                                                                                                "git_blob":  "fc4d8d67a8677f1752d5faf3d3875a25c033ecc7",
+                                                                                                "sha256":  "03ea831e3d730a8269edbd00383e6c7958c085b16c338b69bf16d5a0ffcb5a79"
+                                                                                            },
+                                    "experiments/ios-osg-smoke/data/osg-lock.json":  {
+                                                                                         "git_blob":  "a4cfc763264ea077ae3098687f334b1a2811563a",
+                                                                                         "sha256":  "5b157825dc6b0695b7f0b877c5e04bb9095279e84851ebbb00d96b1943cbc91e"
+                                                                                     },
+                                    "experiments/ios-osg-smoke/src/Checkerboard.hpp":  {
+                                                                                           "git_blob":  "b9bdddbd6248bbcd6756152a8cbc515c056187a2",
+                                                                                           "sha256":  "1930ed9879930e70014ccb5232947639c02870a1bf40dc8609f6a47aaca13292"
+                                                                                       },
+                                    "experiments/ios-osg-smoke/src/OSGScene.hpp":  {
+                                                                                       "git_blob":  "ae03ff0e6271be289b75119bbaa8127c8e3bb872",
+                                                                                       "sha256":  "9e3e6f08499a8ccc0f3ec413a225760fd0662a45296e6d60c6e428c56ef24396"
+                                                                                   },
+                                    "experiments/ios-osg-smoke/Info.plist.in":  {
+                                                                                    "git_blob":  "dcfb5dffaee67f860f56e38535b705085eb37647",
+                                                                                    "sha256":  "5d517de789307d37328bb50b8f24ffb367e74913cbf9ba3770681e606182ff9a"
+                                                                                },
+                                    "experiments/ios-osg-smoke/tools/package_ios.py":  {
+                                                                                           "git_blob":  "b475965d39328951c4a6ef31a61b501c129f4655",
+                                                                                           "sha256":  "ca1bbcdc272da032a8da4a1e675bc9ddaf6bc4455c4631ca5b67fa146ecd3839"
+                                                                                       },
+                                    "experiments/ios-osg-smoke/tools/test_lod_bias.py":  {
+                                                                                             "git_blob":  "21527318195a09e231fba01cd7b094969ba79f89",
+                                                                                             "sha256":  "3b55be546b1b1feb65424de95738269fd491ff9707686adb77da285e3f05af2a"
+                                                                                         },
+                                    "experiments/ios-osg-smoke/src/GLDebugCapture.hpp":  {
+                                                                                             "git_blob":  "f3bf75baa43af0038041175ad18654dc1a49b8ef",
+                                                                                             "sha256":  "e377caa9ab185225243801739145a0fdb49545c170733741a75af85a3e375bb5"
+                                                                                         },
+                                    "experiments/ios-osg-smoke/tools/test_angle_headers.py":  {
+                                                                                                  "git_blob":  "5590d71f7bb6eb5a95a929e6a6c96ee33594667a",
+                                                                                                  "sha256":  "f92ffa45d004d86304b1f1b05e858aa9bc79b7ee708fc286c64a34888915155a"
+                                                                                              },
+                                    "experiments/ios-osg-smoke/CMakeLists.txt":  {
+                                                                                     "git_blob":  "4e1db6042f8a263dfb4f35ae5fe38f0f9e1d8ee7",
+                                                                                     "sha256":  "994fd5442a3423adb11e168d3e1287c1d3f5af60a9d51a08ef95e4317641fab4"
+                                                                                 },
+                                    "experiments/ios-osg-smoke/tools/test_shader_label.py":  {
+                                                                                                 "git_blob":  "8304250eb377f578bce448e24c4819d3673b63c5",
+                                                                                                 "sha256":  "8949dddd18c6bee1e44305b3afa5808f644d56ed54c3589b7521923052496a69"
+                                                                                             },
+                                    "experiments/ios-osg-smoke/tools/test_texture_scene.py":  {
+                                                                                                  "git_blob":  "eb1a6a7e784f73fb8b3a1620982e4452ab2c63dc",
+                                                                                                  "sha256":  "1cb6184acfa32ec3ee60d1aa0dcbf970904025337e7533ec0fabee0a0787ecbf"
+                                                                                              },
+                                    "experiments/ios-osg-smoke/tools/test_artifact_handoff.py":  {
+                                                                                                     "git_blob":  "2b33b8901c07aeaa4b57abdd50f9f9c6061742f4",
+                                                                                                     "sha256":  "1ff36f59d0d18cba804d3ee866bf68672ff6646c32d820e96370959568d45386"
+                                                                                                 },
+                                    "experiments/ios-osg-smoke/README.md":  {
+                                                                                "git_blob":  "d4fae40123882ecd7f077928da924816f54dda0a",
+                                                                                "sha256":  "907cdf52268490f58d52ef7a8cf2c6521fc97516f2c98cab0dde7043ebb7ed56"
+                                                                            },
+                                    "experiments/ios-osg-smoke/tools/workflow_opt_in.py":  {
+                                                                                               "git_blob":  "640a442ef08f1632bff8b3b022ea6e22d2c78d2b",
+                                                                                               "sha256":  "3b71f80ac0e6c6befa0c484fd03d789f3d8ee4761d90c02ade1562be96aa357c"
+                                                                                           },
+                                    "experiments/ios-osg-smoke/data/angle-lock.json":  {
+                                                                                           "git_blob":  "1177af067b271b5610df43de06bca4d44393ad6c",
+                                                                                           "sha256":  "095cab658b01b1546b141f2f8f08ed3e1fe469c9d492a9d7e678a3a7009920e6"
+                                                                                       },
+                                    "experiments/ios-osg-smoke/tools/test_gl_debug.py":  {
+                                                                                             "git_blob":  "85226775444ae067a7ef41fdb6cf79bb38c2339b",
+                                                                                             "sha256":  "fa7448a3289e110b9d2dedbc74583bf8457abc8b72cb891787add9f478675ccf"
+                                                                                         },
+                                    "experiments/ios-osg-smoke/tools/check_angle_headers.py":  {
+                                                                                                   "git_blob":  "4311d548d34090e3f091ef1a32b0ba8f50d28ac6",
+                                                                                                   "sha256":  "09a602d187937a4bdc2561c1c8c69e5b4b36af32b493260af23e26623bada71b"
+                                                                                               }
+                                },
+    "bullet_sha512":  "7086e5fcf69635801bb311261173cb8d173b712ca1bd78be03df48fad884674e85512861190e45a1a62d5627aaad65cde08c175c44a3be9afa410d3dfd5358d4",
+    "graphics_sources_copied":  [
+
+                                ],
+    "depot_tools_revision":  "816da11f80777dcf8c10bdaa84df18450dcba12a",
+    "fixture_text_lf":  [
+                            "fixture-manifest.json",
+                            "nif-source-sha256.json"
+                        ]
+}

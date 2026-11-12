@@ -1,0 +1,11 @@
+{
+    "experiments/ios-osg-smoke/tools/prepare_osg.py":  "2ff0ac669f8ee096dd362fe54372d07ce5b11001d5a4aa41b0ca8d422d7014a4",
+    "experiments/ios-osg-smoke/src/OSGScene.hpp":  "29c051b7a8b0fceb53ab4ff23de241a85c91f6d0a03b16cf292f28e2d7d6e664",
+    "experiments/ios-osg-smoke/src/MipmapObservation.hpp":  "f50b296f4e506fa631ed3e01e80ee6958408143f62bba8a63932ae2b53398600",
+    "experiments/ios-osg-smoke/tools/package_ios.py":  "ce2b96a048ad9338883a6c3cccc178d43de8653a964b8c77d89a5b7c19c8a741",
+    "experiments/ios-osg-smoke/CMakeLists.txt":  "3226dfb98a9a1c6ae2010893ef18eeb383b42215dbabb9b93992fc5a54b3f4d1",
+    "experiments/ios-osg-smoke/data/osg-lock.json":  "9be3b2672af540fa417861540c230574d1aa78ce530ee478d25d5e40a151e24d",
+    "experiments/ios-osg-smoke/tools/test_package_ios.py":  "c4296b42f7a4c22bcb829f69afdb9ff2433bc401e6c5089e3ddbe5ee0b2cdca8",
+    "experiments/ios-osg-smoke/tools/test_integration.py":  "19b48e345775c928a097b8305209da7f13c37627ab4c86b4b4941a504b800dd8",
+    "experiments/ios-osg-smoke/src/main.mm":  "fb7b07c9f3351a6733444f166741c5d8fa4761c004f0bed1943c1af0c5157692"
+}
