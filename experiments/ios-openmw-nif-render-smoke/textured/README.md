@@ -90,7 +90,7 @@ provided verified HTTPS when Windows Schannel could not.
 
 | Check | Local result |
 | --- | --- |
-| G1C offline suite | 30 tests passed; includes 11 inherited binary/bundle/SDK/IPA policy tests |
+| G1C offline suite | 31 tests passed; includes 11 inherited binary/bundle/SDK/IPA policy tests and an actual CMake configure-only flag-scope regression |
 | Existing G0B / G0C / G1A / G1B suites | 46 / 25 / 14 / 21 tests passed |
 | ANGLE offline suite | 77 run: 76 passed, one host C++ compile test skipped |
 | Separate unfinished Build #15 suite | 105 run: 96 passed, four failures, five C++ tests skipped; unchanged working tree |
@@ -98,7 +98,7 @@ provided verified HTTPS when Windows Schannel could not.
 | Python syntax | Seven new Python files parsed/compiled without executing native code |
 | Workflow syntax | 21 Bash blocks and two embedded Python blocks passed; GitHub schema/execution remains CI work |
 | Git/documentation checks | Existing diff and all 36 new files pass whitespace checks; local document links resolve |
-| Native host / iPhoneOS compilation and new IPA | Unverified: local CMake/C++/Apple toolchain unavailable |
+| Native host / iPhoneOS compilation and new IPA | Unverified: local C++/Apple toolchain unavailable; temporary portable CMake supports the configure-only regression |
 
 All 247 files snapshotted before this task remain byte-for-byte unchanged;
 branch, HEAD and Git index remain unchanged too. The 36 additions comprise this
@@ -110,6 +110,19 @@ Review preparation corrected one include-directory entry in `cmake/texture.cmake
 `register_bsa.hpp` lives in `ios-openmw-bsa-vfs/src`, not the nonexistent
 `ios-openmw-esm-vfs/src`. The target already inherited the correct directory
 through E's public interface; its explicit include now names the real provider.
+
+First native CI attempt: [Build #1](https://github.com/austinharvey809-dot/openmw-ios-port/actions/runs/43354934100)
+at `de638bd798c75398ba60e927c56c521d1c88cd5e` passed source regressions,
+Bullet acquisition, and CMake generation, then failed the configured-command
+audit before compilation. Its artifact proves a pinned OSG macOS `CACHE FORCE`
+leaked `-std=c++11` into consumer commands alongside `-std=c++20`.
+The isolated host root now binds the caller's `CMAKE_CXX_FLAGS` in directory
+scope before adding G1A. OSG's own child flags remain C++11/libc++; consumer
+C++20 flags stay target-controlled. The strict single-standard audit remains
+unchanged. A real CMake regression reproduces the unguarded leak and verifies
+the guarded G1A/G1C and OSG scopes, preserving an unrelated caller definition.
+Temporary CMake 4.2.1 was fetched from Kitware's official release with TLS
+verification and its published SHA-256 checked; no system tool was installed.
 
 The four pre-existing Build #15 failures are three `test_lod_bias` expectations
 for the changed Texture.cpp mipmap overlay and one `test_texture_scene` expected

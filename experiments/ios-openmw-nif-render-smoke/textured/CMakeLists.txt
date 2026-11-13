@@ -6,6 +6,9 @@ find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 execute_process(COMMAND "${Python3_EXECUTABLE}" "${G1C_ROOT}/tools/resources.py" audit
     --osg-reference "${OPENMW_ESM_OSG_SOURCE}" COMMAND_ERROR_IS_FATAL ANY)
 # Reuse the completed host parser/geometry/provider without a second OSG instance.
+# A directory binding shields consumers from pinned OSG's macOS cache FORCE.
+# OSG's own child directories retain their original C++11/libc++ flags.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 add_subdirectory("${G1C_ROOT}/.." "${CMAKE_CURRENT_BINARY_DIR}/g1a" EXCLUDE_FROM_ALL)
 set(G1C_OSG_SOURCE "${OPENMW_ESM_OSG_SOURCE}")
 set(G1C_GEOMETRY_TARGET g1a-geometry)

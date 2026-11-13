@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import struct
 import sys
 import tempfile
@@ -173,6 +174,46 @@ class ResourceTests(unittest.TestCase):
 
 
 class SourceTests(unittest.TestCase):
+    def test_cmake_directory_binding_blocks_legacy_osg_cache_flag_leak(self):
+        cmake = os.environ.get('OPENMW_TEST_CMAKE') or shutil.which('cmake')
+        if not cmake:
+            self.skipTest('CMake unavailable; directory-scope configure regression runs in native CI')
+        actual = (ROOT / 'CMakeLists.txt').read_text()
+        binding = 'set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")'
+        self.assertLess(actual.index(binding), actual.index('add_subdirectory('))
+        # Configure-only model of the actual pinned OSG sequence: child C++11
+        # flags, source subdirectory, then a macOS CACHE FORCE in its parent.
+        for guarded in (False, True):
+            with self.subTest(guarded=guarded), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory)
+                (source / 'g1a/osg/src').mkdir(parents=True)
+                (source / 'CMakeLists.txt').write_text(
+                    'cmake_minimum_required(VERSION 3.24)\nproject(FlagScope LANGUAGES NONE)\n'
+                    'set(CMAKE_CXX_FLAGS "-DKEEP_CALLER=1" CACHE STRING "")\n'
+                    + (binding + '\n' if guarded else '')
+                    + 'add_subdirectory(g1a)\nfile(WRITE "${CMAKE_BINARY_DIR}/g1c.txt" "${CMAKE_CXX_FLAGS}")\n')
+                (source / 'g1a/CMakeLists.txt').write_text(
+                    'cmake_minimum_required(VERSION 3.24)\nadd_subdirectory(osg)\n'
+                    'file(WRITE "${CMAKE_BINARY_DIR}/g1a.txt" "${CMAKE_CXX_FLAGS}")\n')
+                (source / 'g1a/osg/CMakeLists.txt').write_text(
+                    'cmake_minimum_required(VERSION 3.5)\n'
+                    'set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -stdlib=libc++")\n'
+                    'add_subdirectory(src)\n'
+                    'set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility-inlines-hidden" CACHE STRING "" FORCE)\n')
+                (source / 'g1a/osg/src/CMakeLists.txt').write_text(
+                    'file(WRITE "${CMAKE_BINARY_DIR}/osg.txt" "${CMAKE_CXX_FLAGS}")\n')
+                build = source / 'build'
+                # No compiler or make invocation: only directory evaluation/generation.
+                subprocess.run([cmake, '-S', str(source), '-B', str(build), '-G', 'Unix Makefiles',
+                                '-DCMAKE_MAKE_PROGRAM=' + str(cmake)], check=True, capture_output=True, text=True)
+                for name in ('g1a.txt', 'g1c.txt'):
+                    flags = (build / name).read_text()
+                    if guarded:
+                        self.assertEqual(flags, '-DKEEP_CALLER=1')
+                    else:
+                        self.assertIn('-std=c++11', flags)
+                self.assertEqual((build / 'osg.txt').read_text(), '-DKEEP_CALLER=1 -std=c++11 -stdlib=libc++')
+
     def test_provider_matches_verified_recipe_with_only_project_and_relative_path_adaptations(self):
         expected = (DEVICE / 'cmake/provider.cmake').read_text()
         expected = expected.replace('project(OpenMWG1B ', 'project(OpenMWG1C ')
