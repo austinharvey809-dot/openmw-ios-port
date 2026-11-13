@@ -1,0 +1,396 @@
+name: iOS OpenMW G1C textured NIF (unsigned device preparation)
+
+# Manual review/run only. CI never installs or runs the device application.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXPERIMENT: experiments/ios-openmw-nif-render-smoke
+  TEXTURED: experiments/ios-openmw-nif-render-smoke/textured
+  OPENMW_SOURCE: ${{ github.workspace }}/openmw
+  OPENMW_ESM_OSG_SOURCE: ${{ github.workspace }}/osg-pinned
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  host-regressions:
+    runs-on: macos-26
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize failure evidence before checkout
+        run: |
+          set -euo pipefail
+          EVIDENCE="$RUNNER_TEMP/openmw-g1c-host-evidence"
+          BUILD_DIR="$RUNNER_TEMP/openmw-g1c-host-build"
+          BULLET_ROOT="$RUNNER_TEMP/openmw-g1a-bullet"
+          mkdir -p "$EVIDENCE"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\nBULLET_ROOT=%s\n' \
+            "$EVIDENCE" "$BUILD_DIR" "$BULLET_ROOT" >> "$GITHUB_ENV"
+          printf 'Requested %s at %s\n' "$GITHUB_REF" "$GITHUB_SHA" > "$EVIDENCE/request.txt"
+
+      - name: Check out requested source and read-only baseline history
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: openmw
+          fetch-depth: 0
+          submodules: false
+          lfs: false
+          persist-credentials: false
+
+      - name: Check out exact pinned OSG source
+        uses: actions/checkout@v6
+        with:
+          repository: OpenMW/osg
+          ref: 9b384d5439977784e5cd250ff8ff7966928ddd27
+          path: osg-pinned
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+          persist-credentials: false
+
+      - name: Verify host, preservation, source and fixture contracts
+        id: sources
+        run: |
+          set -euo pipefail
+          {
+            test "$GITHUB_REF" = refs/heads/ios-port
+            test "$(git -C "$OPENMW_SOURCE" rev-parse HEAD)" = "$GITHUB_SHA"
+            test "$(uname -m)" = arm64
+            sw_vers
+            xcodebuild -version
+            xcrun --sdk macosx clang++ --version
+            cmake --version
+            python3 --version
+          } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/tools/contracts.py" \
+            --osg-source "$OPENMW_ESM_OSG_SOURCE" > "$EVIDENCE/source-audit.json" \
+            2> "$EVIDENCE/source-audit-errors.log"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/device/tools/provenance.py" audit --osg-reference "$OPENMW_ESM_OSG_SOURCE" > "$EVIDENCE/g1b-source-audit.json"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/$EXPERIMENT/device/tools" -p test_g1b.py -v 2>&1 | tee "$EVIDENCE/g1b-tests.log"
+          python3 "$OPENMW_SOURCE/$TEXTURED/tools/resources.py" audit --osg-reference "$OPENMW_ESM_OSG_SOURCE" > "$EVIDENCE/g1c-source-audit.json"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/$TEXTURED/tools" -p test_g1c.py -v 2>&1 | tee "$EVIDENCE/g1c-tests.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/$EXPERIMENT/tools" -p test_g1a.py -v \
+            2>&1 | tee "$EVIDENCE/offline-tests.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/experiments/ios-openmw-nif-smoke/tools" -p test_g0_ci.py -v \
+            2>&1 | tee "$EVIDENCE/g0b-regressions.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/experiments/ios-openmw-nif-device-smoke/tools" -p test_g0c.py -v \
+            2>&1 | tee "$EVIDENCE/g0c-regressions.log"
+
+      - name: Acquire and verify unchanged Bullet 3.25 source
+        id: bullet
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/experiments/ios-openmw-nif-smoke/tools/prepare_bullet.py" --download \
+            --output "$BULLET_ROOT" --evidence "$EVIDENCE" 2>&1 | tee "$EVIDENCE/bullet-acquisition.log"
+
+      - name: Configure single-provider native textured resource harness
+        id: configure
+        run: |
+          set -euo pipefail
+          cmake -S "$OPENMW_SOURCE/$TEXTURED" -B "$BUILD_DIR" -G 'Unix Makefiles' \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+            -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" \
+            -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_CXX_COMPILER="$(xcrun --sdk macosx --find clang++)" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tee "$EVIDENCE/configure.log"
+          python3 "$OPENMW_SOURCE/$TEXTURED/tools/resources.py" host-configured --osg-reference "$OPENMW_ESM_OSG_SOURCE" \
+            --build "$BUILD_DIR" --bullet "$BULLET_ROOT/source" > "$EVIDENCE/configured-audit.json" \
+            2> "$EVIDENCE/configured-audit-errors.log"
+
+      - name: Compile and inspect actual ARM64 host products
+        id: build
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --target openmw-textured-nif-check openmw-nif-geometry-check openmw-nif-parse-check --parallel 4 \
+            2>&1 | tee "$EVIDENCE/build.log"
+          test "$(wc -l < "$BUILD_DIR/g1c-host-products-Release.txt")" -eq 3
+          while IFS= read -r product; do
+            test -f "$product" && test -x "$product" && test ! -L "$product"
+            test "$(xcrun lipo -archs "$product")" = arm64
+            shasum -a 256 "$product" >> "$EVIDENCE/executables-sha256.txt"
+            otool -L "$product" >> "$EVIDENCE/executable-dependencies.txt"
+          done < "$BUILD_DIR/g1c-host-products-Release.txt"
+
+      - name: Execute textured ownership/negative gates and preserved geometry/parser suites
+        id: runtime
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$BUILD_DIR/g1a" -R '^g1a-' --no-tests=error \
+            --output-on-failure -V 2>&1 | tee "$EVIDENCE/g1a-native-tests.log"
+          ctest --test-dir "$BUILD_DIR" -R '^g1c-' --no-tests=error \
+            --output-on-failure -V 2>&1 | tee "$EVIDENCE/native-tests.log"
+
+      - name: Retain diagnostics and separate gate outcomes even on failure
+        if: always()
+        env:
+          SOURCE_GATE: ${{ steps.sources.outcome }}
+          BULLET_GATE: ${{ steps.bullet.outcome }}
+          CONFIGURE_GATE: ${{ steps.configure.outcome }}
+          BUILD_GATE: ${{ steps.build.outcome }}
+          RUNTIME_GATE: ${{ steps.runtime.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          evidence = Path(os.environ['EVIDENCE'])
+          build = Path(os.environ['BUILD_DIR'])
+          evidence.mkdir(parents=True, exist_ok=True)
+          if build.is_dir():
+              for path in build.rglob('*'):
+                  if path.is_file() and (path.name in {'CMakeCache.txt', 'compile_commands.json',
+                          'CMakeConfigureLog.yaml', 'CMakeError.log', 'CMakeOutput.log',
+                          'g1c-host-products-Release.txt', 'openmw-textured-nif-check', 'openmw-nif-geometry-check', 'openmw-nif-parse-check'}
+                          or 'evidence' in path.relative_to(build).parts
+                          or path.parent.name == 'generated'):
+                      target = evidence / 'build' / path.relative_to(build)
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(path, target)
+          status = {'gates': {name: os.environ.get(name, 'not-run') for name in
+                    ('SOURCE_GATE', 'BULLET_GATE', 'CONFIGURE_GATE', 'BUILD_GATE', 'RUNTIME_GATE')},
+                    'gpu_rendering': 'not-performed', 'iphoneos_build': 'not-performed',
+                    'ipa_packaging': 'not-performed', 'physical_device': 'not-performed'}
+          (evidence / 'job-status.json').write_text(json.dumps(status, indent=2) + '\n')
+          (evidence / 'SHA256SUMS').write_text('\n'.join(hashlib.sha256(p.read_bytes()).hexdigest()
+              + '  ' + p.relative_to(evidence).as_posix() for p in sorted(evidence.rglob('*'))
+              if p.is_file() and p.name != 'SHA256SUMS') + '\n')
+          PY
+
+      - name: Upload host-only evidence including failures
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: openmw-g1c-host-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openmw-g1c-host-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  angle-device:
+    needs: host-regressions
+    runs-on: macos-26
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize ANGLE failure evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/g1c-angle-evidence"
+          printf 'EVIDENCE=%s\nANGLE_ROOT=%s\n' "$RUNNER_TEMP/g1c-angle-evidence" "$RUNNER_TEMP/g1c-angle-device" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: openmw
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Build exact locked ANGLE Metal iPhoneOS package
+        id: angle
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/ios-port
+          python3 -u "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/build_angle.py" \
+            --workspace "$RUNNER_TEMP/g1c-angle-work" --output "$ANGLE_ROOT" --allow-downloads --jobs 3 \
+            2>&1 | tee "$EVIDENCE/angle-build.log"
+          python3 "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/validate_dependency.py" \
+            --root "$ANGLE_ROOT" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            2>&1 | tee "$EVIDENCE/angle-validation.log"
+          tar -czf "$EVIDENCE/g1c-angle-device.tar.gz" -C "$RUNNER_TEMP" g1c-angle-device
+          test -s "$EVIDENCE/g1c-angle-device.tar.gz"
+          shasum -a 256 "$EVIDENCE/g1c-angle-device.tar.gz" > "$EVIDENCE/archive-sha256.txt"
+      - name: Preserve available ANGLE failure diagnostics
+        if: always()
+        env:
+          ANGLE_GATE: ${{ steps.angle.outcome }}
+        run: |
+          set -euo pipefail
+          printf 'ANGLE gate: %s; physical execution not performed\n' "$ANGLE_GATE" > "$EVIDENCE/job-status.txt"
+          for file in args.gn build.ninja toolchain.ninja; do
+            source="$RUNNER_TEMP/g1c-angle-work/angle/out/ios-angle-arm64/$file"
+            if test -f "$source"; then cp "$source" "$EVIDENCE/"; fi
+          done
+          if test -f "$ANGLE_ROOT/angle-build.json"; then cp "$ANGLE_ROOT/angle-build.json" "$EVIDENCE/"; fi
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: g1c-angle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/g1c-angle-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  iphoneos-geometry:
+    needs: [host-regressions, angle-device]
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Initialize native failure evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/g1c-native-evidence"
+          printf 'EVIDENCE=%s\nBUILD_DIR=%s\nBULLET_ROOT=%s\nANGLE_ROOT=%s\nOSG_RENDERER=%s\n' \
+            "$RUNNER_TEMP/g1c-native-evidence" "$RUNNER_TEMP/g1c-native-build" "$RUNNER_TEMP/g1c-native-bullet" \
+            "$RUNNER_TEMP/g1c-angle-device" "$RUNNER_TEMP/g1b-osg-renderer" >> "$GITHUB_ENV"
+      - name: Check out requested source and provenance history
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: openmw
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Check out clean pinned audit reference
+        uses: actions/checkout@v6
+        with:
+          repository: OpenMW/osg
+          ref: 9b384d5439977784e5cd250ff8ff7966928ddd27
+          path: osg-pinned
+          persist-credentials: false
+          submodules: false
+          lfs: false
+      - name: Audit preservation and source provenance
+        id: sources
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/ios-port
+          test "$(git -C "$OPENMW_SOURCE" rev-parse HEAD)" = "$GITHUB_SHA"
+          xcodebuild -version > "$EVIDENCE/xcode-version.txt"
+          xcrun --sdk iphoneos --show-sdk-version > "$EVIDENCE/sdk-version.txt"
+          python3 "$OPENMW_SOURCE/$EXPERIMENT/device/tools/provenance.py" audit \
+            --osg-reference "$OPENMW_ESM_OSG_SOURCE" > "$EVIDENCE/source-audit.json" 2> "$EVIDENCE/source-audit-errors.log"
+          python3 -m unittest discover -s "$OPENMW_SOURCE/$EXPERIMENT/device/tools" -p test_g1b.py -v \
+            2>&1 | tee "$EVIDENCE/offline-tests.log"
+      - uses: actions/download-artifact@v4
+        with:
+          name: g1c-angle-${{ github.run_id }}-${{ github.run_attempt }}
+          path: angle-artifact
+      - name: Restore and independently revalidate exact ANGLE device package
+        id: angle
+        run: |
+          set -euo pipefail
+          test -s angle-artifact/g1c-angle-device.tar.gz
+          tar -xzf angle-artifact/g1c-angle-device.tar.gz -C "$RUNNER_TEMP"
+          python3 "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/validate_dependency.py" \
+            --root "$ANGLE_ROOT" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" 2>&1 | tee "$EVIDENCE/restored-angle-sdk.log"
+          python3 "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/validate_dependency.py" \
+            --root "$ANGLE_ROOT" --resolve "$EVIDENCE/angle-restored.cmake" 2>&1 | tee "$EVIDENCE/restored-angle-inventory.log"
+      - name: Acquire unchanged Bullet and prepare separate v2 OSG renderer copy
+        id: dependencies
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/experiments/ios-openmw-nif-smoke/tools/prepare_bullet.py" --download \
+            --output "$BULLET_ROOT" --evidence "$EVIDENCE" 2>&1 | tee "$EVIDENCE/bullet-acquisition.log"
+          python3 -u "$OPENMW_SOURCE/$EXPERIMENT/device/baseline/tools/prepare_osg.py" \
+            --source "$OSG_RENDERER" --allow-downloads 2>&1 | tee "$EVIDENCE/osg-preparation.log"
+          cp "$OSG_RENDERER/ios-osg-overlay.json" "$EVIDENCE/"
+      - name: Configure exactly one GLES3 iPhoneOS provider and genuine parser
+        id: configure
+        run: |
+          set -euo pipefail
+          cmake -S "$OPENMW_SOURCE/$TEXTURED/device" -B "$BUILD_DIR" -G 'Unix Makefiles' \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DANGLE_ROOT="$ANGLE_ROOT" -DOSG_SOURCE="$OSG_RENDERER" \
+            -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tee "$EVIDENCE/configure.log"
+          python3 "$OPENMW_SOURCE/$TEXTURED/tools/resources.py" configured \
+            --osg-reference "$OPENMW_ESM_OSG_SOURCE" --build "$BUILD_DIR" --bullet "$BULLET_ROOT/source" \
+            > "$EVIDENCE/configured-audit.json" 2> "$EVIDENCE/configured-audit-errors.log"
+          test "$(wc -l < "$BUILD_DIR/g1c-products-Release.txt")" -eq 3
+          printf 'LINK_PRODUCT=%s\nAPP_PRODUCT=%s\nAPP_BUNDLE=%s\n' \
+            "$(sed -n '1p' "$BUILD_DIR/g1c-products-Release.txt")" \
+            "$(sed -n '2p' "$BUILD_DIR/g1c-products-Release.txt")" \
+            "$(sed -n '3p' "$BUILD_DIR/g1c-products-Release.txt")" >> "$GITHUB_ENV"
+      - name: Compile and link genuine device geometry executable
+        id: link
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --target openmw-textured-nif-check --parallel 3 2>&1 | tee "$EVIDENCE/link-build.log"
+          test -f "$LINK_PRODUCT" && test ! -L "$LINK_PRODUCT"
+          python3 "$OPENMW_SOURCE/$TEXTURED/tools/package_textured.py" link --product "$LINK_PRODUCT" \
+            --prepared "$BUILD_DIR/prepared" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --evidence "$EVIDENCE"
+      - name: Compile and link UIKit textured NIF application
+        id: app
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --target IOSOpenMWTexturedNif --parallel 3 2>&1 | tee "$EVIDENCE/app-build.log"
+          test -f "$APP_PRODUCT" && test ! -L "$APP_PRODUCT"
+          test "$(xcrun lipo -archs "$APP_PRODUCT")" = arm64
+          xcrun vtool -show-build "$APP_PRODUCT" > "$EVIDENCE/app-platform.txt"
+          shasum -a 256 "$APP_PRODUCT" > "$EVIDENCE/app-executable-sha256.txt"
+      - name: Inspect native dependencies and exact complete application inventory
+        id: bundle
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/$TEXTURED/tools/package_textured.py" bundle --product "$APP_BUNDLE" \
+            --prepared "$BUILD_DIR/prepared" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --evidence "$EVIDENCE"
+      - name: Package validated unsigned IPA
+        id: ipa
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/$TEXTURED/tools/package_textured.py" ipa --product "$APP_BUNDLE" \
+            --prepared "$BUILD_DIR/prepared" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --evidence "$EVIDENCE" \
+            --output "$EVIDENCE/IOSOpenMWTexturedNif-unsigned.ipa"
+      - name: Independently reopen IPA and repeat all binary and resource checks
+        id: reopen
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/$TEXTURED/tools/package_textured.py" reopen \
+            --product "$EVIDENCE/IOSOpenMWTexturedNif-unsigned.ipa" --prepared "$BUILD_DIR/prepared" \
+            --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --evidence "$EVIDENCE"
+      - name: Retain native diagnostics and separate gate outcomes on failure
+        if: always()
+        env:
+          SOURCE_GATE: ${{ steps.sources.outcome }}
+          ANGLE_GATE: ${{ steps.angle.outcome }}
+          DEPENDENCY_GATE: ${{ steps.dependencies.outcome }}
+          CONFIGURE_GATE: ${{ steps.configure.outcome }}
+          LINK_GATE: ${{ steps.link.outcome }}
+          APP_GATE: ${{ steps.app.outcome }}
+          BUNDLE_GATE: ${{ steps.bundle.outcome }}
+          IPA_GATE: ${{ steps.ipa.outcome }}
+          REOPEN_GATE: ${{ steps.reopen.outcome }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          evidence, build = Path(os.environ['EVIDENCE']), Path(os.environ['BUILD_DIR'])
+          evidence.mkdir(parents=True, exist_ok=True)
+          if build.is_dir():
+              for path in build.rglob('*'):
+                  if path.is_file() and (path.name in {'CMakeCache.txt', 'compile_commands.json', 'CMakeConfigureLog.yaml',
+                          'CMakeError.log', 'CMakeOutput.log', 'g1c-products-Release.txt'}
+                          or 'prepared' in path.relative_to(build).parts or path.name in
+                          {'openmw-textured-nif-check', 'IOSOpenMWTexturedNif'}):
+                      target = evidence / 'build' / path.relative_to(build)
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copyfile(path, target)
+          status = {'gates': {name: os.environ.get(name, 'not-run') for name in ('SOURCE_GATE', 'ANGLE_GATE',
+                    'DEPENDENCY_GATE', 'CONFIGURE_GATE', 'LINK_GATE', 'APP_GATE', 'BUNDLE_GATE', 'IPA_GATE', 'REOPEN_GATE')},
+                    'shader_execution': 'not-performed by CI', 'displayed_triangle': 'not-observed',
+                    'gpu_completion': 'unverified', 'lifecycle_recovery': 'unverified', 'device_acceptance': 'unverified'}
+          (evidence / 'job-status.json').write_text(json.dumps(status, indent=2) + '\n')
+          (evidence / 'SHA256SUMS').write_text('\n'.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  '
+              + p.relative_to(evidence).as_posix() for p in sorted(evidence.rglob('*'))
+              if p.is_file() and p.name != 'SHA256SUMS') + '\n')
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: g1c-native-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/g1c-native-evidence/
+          if-no-files-found: error
+          retention-days: 14

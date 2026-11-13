@@ -1,0 +1,21 @@
+{
+  ".github/workflows/ios-openmw-nif-render-device-smoke.yml": "63b922b2f68bc64a1d281895f8bae104f01b54c36ff9456abde1c33dfd3ef1ee",
+  "experiments/ios-openmw-nif-render-smoke/device/CMakeLists.txt": "e6c0be863f8e491c1dd73b08701f5c2ab6c8ab2d563b41f4d5c94b3544502736",
+  "experiments/ios-openmw-nif-render-smoke/device/Info.plist.in": "21a761e1729a0628fff68ae7db5b83d658d1b9eb7880cf6e61b75d95466a1b5a",
+  "experiments/ios-openmw-nif-render-smoke/device/README.md": "f4a86db07255de7084acb7fd706f8c96c73c5e5d0de10a4ec3f9de8fa7e6f03e",
+  "experiments/ios-openmw-nif-render-smoke/device/baseline/data/osg-lock.json": "5b157825dc6b0695b7f0b877c5e04bb9095279e84851ebbb00d96b1943cbc91e",
+  "experiments/ios-openmw-nif-render-smoke/device/baseline/src/GLDebugCapture.hpp": "e377caa9ab185225243801739145a0fdb49545c170733741a75af85a3e375bb5",
+  "experiments/ios-openmw-nif-render-smoke/device/baseline/tools/check_angle_headers.py": "09a602d187937a4bdc2561c1c8c69e5b4b36af32b493260af23e26623bada71b",
+  "experiments/ios-openmw-nif-render-smoke/device/baseline/tools/check_osg_source.py": "03ea831e3d730a8269edbd00383e6c7958c085b16c338b69bf16d5a0ffcb5a79",
+  "experiments/ios-openmw-nif-render-smoke/device/baseline/tools/prepare_osg.py": "517cfa236cb792fa3cd260c15a02a4b42972953981d9855076bd5763c1b8d156",
+  "experiments/ios-openmw-nif-render-smoke/device/cmake/precision.cmake": "cbd1f965bcb6ae1c2fa8064acd73fc2aa52a5dcd5577a22bf79497ee5259b808",
+  "experiments/ios-openmw-nif-render-smoke/device/cmake/provider.cmake": "c764e7e6c3ac036116bd3747996031e24ec458682339b555e5d3879e185a1173",
+  "experiments/ios-openmw-nif-render-smoke/device/data/preserved-source-sha256.json": "77fb1a0127c7d7d0fd1bf6473e9046c5b13beae6cd40bc23c381e34be5efd3f0",
+  "experiments/ios-openmw-nif-render-smoke/device/data/source-origins.json": "5bf3fb6b22c84fb1597ce74df07cf1cfc00062f81a29dd4d5e6a6ea5ed2fe696",
+  "experiments/ios-openmw-nif-render-smoke/device/src/AngleRenderer.hpp": "1fff7ab2288326829a81347c885fba3dc97daefb1bae6b08f877c249d0fd1bd6",
+  "experiments/ios-openmw-nif-render-smoke/device/src/OSGScene.hpp": "861e5c2adea18bb47dcf1d5b5dfef283474e41895a86e47a69d4e334efd82820",
+  "experiments/ios-openmw-nif-render-smoke/device/src/main.mm": "210c30728c4ccd06a18caab6f14a595761c89690016827c0497c4d4d93d0cdba",
+  "experiments/ios-openmw-nif-render-smoke/device/tools/package_device.py": "14434300d8d09488506319e5a256a24286793ff6a04361c378be016e5e6e8466",
+  "experiments/ios-openmw-nif-render-smoke/device/tools/provenance.py": "c0a7a9b63fad0949388c8819157f135cd33201acddd7a996f1fadf47182d18eb",
+  "experiments/ios-openmw-nif-render-smoke/device/tools/test_g1b.py": "375d0eebd670d0c72c1b4a99b076b1d886c628afcda2350292d8ae804cc7e3a8"
+}

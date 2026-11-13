@@ -1,0 +1,115 @@
+{
+  "cases": [
+    {
+      "archive": "textured.bsa",
+      "diagnostic": "",
+      "nif_sha256": "7677739cca6c8b86b600e53184734b4c3c2d5f1fc42b775ff74b295e1315af13",
+      "texture_sha256": "e2362c56b06c28fd52957917bfcdcad1eadffe745e11b7283b641ae762df2532"
+    },
+    {
+      "archive": "invalid-header.bsa",
+      "diagnostic": "Invalid NIF header",
+      "nif_sha256": "64bdac3d5b25cc188441d615d5769ce8f3285be4b23cab75fb2513c607376b84",
+      "texture_sha256": "e2362c56b06c28fd52957917bfcdcad1eadffe745e11b7283b641ae762df2532"
+    },
+    {
+      "archive": "invalid-reference.bsa",
+      "diagnostic": "Genuine NIF parse rejected",
+      "nif_sha256": "ad29ee1e64292ef9241de0424c59340c658c9e2a75862f1fa74cd825347480b4",
+      "texture_sha256": "e2362c56b06c28fd52957917bfcdcad1eadffe745e11b7283b641ae762df2532"
+    },
+    {
+      "archive": "invalid-uv.bsa",
+      "diagnostic": "Invalid UV",
+      "nif_sha256": "e132e36732cdef9d7aa45850478526b673b8bc971ce8e00c8615bdc276feba79",
+      "texture_sha256": "e2362c56b06c28fd52957917bfcdcad1eadffe745e11b7283b641ae762df2532"
+    },
+    {
+      "archive": "unsafe-texture.bsa",
+      "diagnostic": "Unsafe texture",
+      "nif_sha256": "e6d6d3c40f95f592d4874a3fa1d3f14b57a3fde8a25907457ae7755baa8c1972",
+      "texture_sha256": "e2362c56b06c28fd52957917bfcdcad1eadffe745e11b7283b641ae762df2532"
+    },
+    {
+      "archive": "missing-texture.bsa",
+      "diagnostic": "Missing/unexpected texture",
+      "nif_sha256": "7677739cca6c8b86b600e53184734b4c3c2d5f1fc42b775ff74b295e1315af13",
+      "texture_sha256": "e2362c56b06c28fd52957917bfcdcad1eadffe745e11b7283b641ae762df2532"
+    },
+    {
+      "archive": "bad-image.bsa",
+      "diagnostic": "TGA decode rejected",
+      "nif_sha256": "7677739cca6c8b86b600e53184734b4c3c2d5f1fc42b775ff74b295e1315af13",
+      "texture_sha256": "3e47726bb8c06339a70ff3fcad490cfee9588ac0a30ea1181c23143572fe9629"
+    }
+  ],
+  "diffuse": [
+    0.75,
+    1.0,
+    0.5,
+    1.0
+  ],
+  "files": {
+    "bad-image.bsa": {
+      "sha256": "7ab00887a63d31356630a009adbc0c687eb518cfa3ab707c4d615459f80eeaa3",
+      "size": 806
+    },
+    "invalid-header.bsa": {
+      "sha256": "1921c0ba321bcbf6a8610d8b332b9c592a22bceb1ba77e67ad9ab854fdb8cab8",
+      "size": 1068
+    },
+    "invalid-reference.bsa": {
+      "sha256": "7ca40971952c21f664e1e316fec8d36020164282cafdfb0ce399308d16af9f74",
+      "size": 1068
+    },
+    "invalid-uv.bsa": {
+      "sha256": "59f4d3b2e7d38f01c37b2e94d538d0932768ed6d0c3a7b02a001372c09773145",
+      "size": 1068
+    },
+    "missing-texture.bsa": {
+      "sha256": "24ce920c1d4809c128da22bc427fdb8eba9d30a40058428c22bc79770e7e1ee9",
+      "size": 744
+    },
+    "pattern.tga": {
+      "sha256": "e2362c56b06c28fd52957917bfcdcad1eadffe745e11b7283b641ae762df2532",
+      "size": 274
+    },
+    "textured.bsa": {
+      "sha256": "3827e16f1f1d8f10dd4622ea3373b364bbfdd72c2a4f04ea6dc133b47b004f1f",
+      "size": 1068
+    },
+    "textured.esm": {
+      "sha256": "5327cd004b517854ddbd781bbedafc56de96275a536039f58726a521ea186a47",
+      "size": 380
+    },
+    "textured.nif": {
+      "sha256": "7677739cca6c8b86b600e53184734b4c3c2d5f1fc42b775ff74b295e1315af13",
+      "size": 692
+    },
+    "unsafe-texture.bsa": {
+      "sha256": "fc874382b2f59050a2f61f3041fd5ef0d84341292db12b85a7b66acb00ea5a59",
+      "size": 1062
+    }
+  },
+  "nif_records": 6,
+  "origin": "Self-authored synthetic assets, no Bethesda content",
+  "resource_key": "meshes/textured.nif",
+  "rgba_sha256": "758a41b756ff0a329f9579ec27db5c6cd6504101c3b0546e5d96be73b7865290",
+  "sampler": "NEAREST/CLAMP_TO_EDGE; no mipmaps",
+  "schema_version": 1,
+  "texture_key": "textures/patterns/niftest.tga",
+  "uv": [
+    [
+      0.0,
+      0.0
+    ],
+    [
+      1.0,
+      0.0
+    ],
+    [
+      0.0,
+      1.0
+    ]
+  ]
+}

@@ -1,0 +1,24 @@
+G1C adds a statically registered TGA reader from the unchanged pinned OSG tree.
+Preserve the existing OpenMW, OSG, OpenThreads, Bullet and ANGLE notices shipped
+by the G1B resource preparation. The TGA source carries this additional notice:
+
+Follows is code extracted from the simage library. Original Authors:
+Systems in Motion, <URL:http://www.sim.no>
+Peder Blekken <pederb@sim.no>
+Morten Eriksen <mortene@sim.no>
+Marius Bugge Monsen <mariusbu@sim.no>
+
+The original COPYING notice
+All files in this library are public domain, except simage_rgb.cpp which is
+Copyright (c) Mark J Kilgard <mjk@nvidia.com>. I will contact Mark
+very soon to hear if this source also can become public domain.
+Please send patches for bugs and new features to: <pederb@sim.no>.
+Peder Blekken
+
+Ported into the OSG as a plugin, Robert Osfield December 2000.
+Note, reference above to license of simage_rgb is not relevant to the OSG
+as the OSG does not use it. Also for patches, bugs and new features
+please send them direct to the OSG dev team rather than address above.
+
+The new ESM/BSA/NIF/TGA inputs are self-authored synthetic test assets generated
+by tools/fixtures.py. They contain no extracted Bethesda game content.

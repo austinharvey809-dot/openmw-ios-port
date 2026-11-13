@@ -1,0 +1,10 @@
+{
+  "openmw_sha256_lf": {
+    "components/misc/resourcehelpers.cpp": "847a5cbc497e1cdced30d98fce5adf410d6e47b61bda2b5b4036a14c3adc5ef1",
+    "components/misc/resourcehelpers.hpp": "adb4762da94b6d21e34444493a002717f54e522e640a549aa2475a3929c82b10",
+    "components/resource/cachestats.hpp": "08d42a4540ac264b5c9b4951caeaaab427f6ce51a660c222665a29644e951505",
+    "components/resource/objectcache.hpp": "57243ed789a4df91f41f0af379c90afa5b9b04c8b040d995e15391e024335896"
+  },
+  "osg_revision": "9b384d5439977784e5cd250ff8ff7966928ddd27",
+  "tga_sha256_lf": "03e2df72e03b5604e1c7428ee52fc70967c3239969e8328e2652333551b77470"
+}

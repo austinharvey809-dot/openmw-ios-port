@@ -1,0 +1,5 @@
+data/*.bsa -text
+data/*.esm -text
+data/*.nif -text
+data/*.tga -text
+data/*.json text eol=lf
