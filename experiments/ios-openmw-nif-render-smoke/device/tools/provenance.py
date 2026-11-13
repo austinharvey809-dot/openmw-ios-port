@@ -159,6 +159,13 @@ def prepare(args):
     return {'prepared_resource_files': len(resources), 'metadata_sha256': sha(resources['g1b-build.json'])}
 
 
+def require_cxx20(tokens):
+    standards = [token for token in tokens if token.startswith(('-std=', '--std='))
+                 or token in ('-std', '--std')]
+    require(len(standards) == 1 and standards[0] in ('-std=c++20', '-std=c++2a'),
+            'Consumer requires exactly one strict C++20 standard option (-std=c++20 or -std=c++2a)')
+
+
 def configured(build, bullet):
     original = host.load('_g1b_precision_audit', REPO / 'experiments/ios-openmw-nif-smoke/tools/validate_build.py')
     precision = original.audit(build, bullet)
@@ -189,7 +196,7 @@ def configured(build, bullet):
             require(canonical in includes and all(includes.index(canonical) < index
                     for index, path in enumerate(includes) if '/osg-math/include' in path),
                     'Math-only configuration shadows renderer')
-            require('c++20' in command, 'Consumer lacks C++20')
+            require_cxx20(tokens)
             require('OpenGLES.framework' not in command and '-framework OpenGL' not in command, 'Alternate GL provider')
             selected.append(name)
     require(any(n.endswith('GeometryAdapter.cpp') for n in selected) and any(n.endswith('/device/src/main.mm') for n in selected),

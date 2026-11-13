@@ -171,6 +171,17 @@ is never native execution or device evidence.
 
 ## Validation performed and remaining risks
 
+Build #1 at `afe66aeea2363e2aa5c6f8f3a29febc48e7d8254` passed host regressions
+and ANGLE validation. Published native-job logs confirm successful CMake
+configuration/generation followed by a failed provenance audit; device build
+and packaging steps were skipped. The supplied independent artifact review
+identifies AppleClang's strict C++20 spelling `-std=c++2a` as the rejected option.
+The Build #2 correction checks parsed standard-option tokens instead of a
+substring: exactly one `-std=c++20` or `-std=c++2a` is accepted. Five added
+regressions retain the original sixteen tests (twenty-one total), covering both
+spellings, missing/unsupported/multiple standards and unrelated arguments.
+The new tests remain unexecuted locally; this correction proves no native gate.
+
 Local Python cannot launch (`The file cannot be accessed by the system` from
 the WindowsApps alias); CMake/C++/Apple tools are unavailable. New Python tests
 and syntax, configured build audits, iPhoneOS compilation/linking, SDK inspection,

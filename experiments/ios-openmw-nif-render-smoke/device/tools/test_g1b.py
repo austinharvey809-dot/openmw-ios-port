@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import shlex
 import stat
 import struct
 import tempfile
@@ -166,6 +167,39 @@ class BinaryAndPackageTests(unittest.TestCase):
                     archive.writestr(name, b'bad')
                 with patch.object(package, 'prepared_resources', return_value=(resources, metadata)), self.assertRaises(ValueError):
                     package.validate_ipa(ipa, Path('.'))
+
+
+class LanguageStandardTests(unittest.TestCase):
+    def test_appleclang_objective_cxx20_draft_spelling(self):
+        command = ('/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++ '
+                   '-x objective-c++ -I/Users/runner/work/_temp/g1b-native-build/osg/include '
+                   '-std=c++2a -arch arm64 -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/'
+                   'iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk -miphoneos-version-min=18.0 '
+                   '-c "/Users/runner/work/openmw/experiments/ios-openmw-nif-render-smoke/device/src/main.mm"')
+        p.require_cxx20(shlex.split(command))
+
+    def test_normal_strict_cxx20_spelling(self):
+        p.require_cxx20(shlex.split('clang++ -std=c++20 -arch arm64 -c GeometryAdapter.cpp'))
+
+    def test_missing_older_newer_and_non_strict_standards_rejected(self):
+        for option in ('', '-std=c++14', '-std=c++17', '-std=c++23', '-std=c++2b', '-std=c++26',
+                       '-std=gnu++20', '-std=gnu++2a', '-std=c++20-extra', '-std=', '-std c++20', '--std=c++20'):
+            with self.subTest(option=option), self.assertRaises(ValueError):
+                p.require_cxx20(shlex.split('clang++ ' + option + ' -c main.mm'))
+
+    def test_multiple_or_conflicting_standard_options_rejected(self):
+        for options in ('-std=c++20 -std=c++17', '-std=c++17 -std=c++2a', '-std=c++20 -std=c++23',
+                        '-std=c++20 -std=c++2a', '-std=c++20 -std=c++20', '-std=c++2a --std=c++17',
+                        '-std=c++20 -std c++14'):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                p.require_cxx20(shlex.split('clang++ ' + options + ' -c main.mm'))
+
+    def test_unrelated_arguments_cannot_supply_the_standard(self):
+        for argument in ('-DNOTE=c++20', '-DNOTE=-std=c++20', '-DNOTE="text -std=c++20"', '-I/tmp/c++20',
+                         '-include /tmp/c++20.hpp', '"/tmp/-std=c++2a/main.mm"'):
+            for option in ('', '-std=c++17'):
+                with self.subTest(argument=argument, option=option), self.assertRaises(ValueError):
+                    p.require_cxx20(shlex.split('clang++ ' + argument + ' ' + option))
 
 
 class SourceTests(unittest.TestCase):
