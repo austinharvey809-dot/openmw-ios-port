@@ -174,6 +174,15 @@ class ResourceTests(unittest.TestCase):
 
 
 class SourceTests(unittest.TestCase):
+    def test_static_decoder_exports_apple_fileutils_framework_dependencies(self):
+        cmake = (ROOT / 'cmake/texture.cmake').read_text()
+        apple = re.search(r'if\(APPLE\)(.*?)endif\(\)', cmake, re.S).group(1)
+        self.assertIn('foreach(_framework Foundation CoreFoundation)', apple)
+        self.assertIn('find_library(G1C_${_framework} NAMES ${_framework} REQUIRED)', apple)
+        self.assertIn('target_link_libraries(g1c-tga PUBLIC "${G1C_${_framework}}")', apple)
+        self.assertIn('target_link_libraries(g1c-texture PUBLIC ${G1C_GEOMETRY_TARGET} g1c-tga)', cmake)
+        self.assertIn('target_link_libraries(openmw-textured-nif-check PRIVATE g1c-texture)', cmake)
+
     def test_cmake_directory_binding_blocks_legacy_osg_cache_flag_leak(self):
         cmake = os.environ.get('OPENMW_TEST_CMAKE') or shutil.which('cmake')
         if not cmake:

@@ -90,7 +90,7 @@ provided verified HTTPS when Windows Schannel could not.
 
 | Check | Local result |
 | --- | --- |
-| G1C offline suite | 31 tests passed; includes 11 inherited binary/bundle/SDK/IPA policy tests and an actual CMake configure-only flag-scope regression |
+| G1C offline suite | 32 tests passed; includes 11 inherited binary/bundle/SDK/IPA policy tests, an actual CMake configure-only flag-scope regression, and the decoder's transitive Apple-framework contract |
 | Existing G0B / G0C / G1A / G1B suites | 46 / 25 / 14 / 21 tests passed |
 | ANGLE offline suite | 77 run: 76 passed, one host C++ compile test skipped |
 | Separate unfinished Build #15 suite | 105 run: 96 passed, four failures, five C++ tests skipped; unchanged working tree |
@@ -123,6 +123,17 @@ unchanged. A real CMake regression reproduces the unguarded leak and verifies
 the guarded G1A/G1C and OSG scopes, preserving an unrelated caller definition.
 Temporary CMake 4.2.1 was fetched from Kitware's official release with TLS
 verification and its published SHA-256 checked; no system tool was installed.
+
+[Build #2](https://github.com/austinharvey809-dot/openmw-ios-port/actions/runs/43355769790)
+at `f97d8c13e675dc1029b933581244dd0990a5e67f` then passed real macOS
+texture decoding, equivalence/ownership, 11 mutations, six negative archives,
+the preserved geometry/parser suites, ANGLE device validation, and iPhoneOS
+configuration/compilation. The final device check link failed on Foundation
+and CoreFoundation symbols in the newly pulled-in `osgDB::FileUtils` object.
+Those frameworks were previously private to the UIKit executable. The static
+TGA target now exports both frameworks to all its consumers; upstream sources,
+dependency pins, signature rules and selected-SDK dependency validation remain
+unchanged. UIKit compilation and packaging were not reached in that attempt.
 
 The four pre-existing Build #15 failures are three `test_lod_bias` expectations
 for the changed Texture.cpp mipmap overlay and one `test_texture_scene` expected

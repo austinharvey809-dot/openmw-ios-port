@@ -4,6 +4,14 @@ target_include_directories(g1c-tga BEFORE PUBLIC "$<BUILD_INTERFACE:${G1C_GENERA
     "${G1C_OSG_SOURCE}/include")
 target_compile_definitions(g1c-tga PRIVATE OSG_LIBRARY_STATIC OPENTHREADS_STATIC)
 target_link_libraries(g1c-tga PUBLIC osgDB osg OpenThreads)
+if(APPLE)
+    # Static TGA registration pulls osgDB's Apple FileUtils object into every
+    # consumer, including the C++ link check without UIKit's framework list.
+    foreach(_framework Foundation CoreFoundation)
+        find_library(G1C_${_framework} NAMES ${_framework} REQUIRED)
+        target_link_libraries(g1c-tga PUBLIC "${G1C_${_framework}}")
+    endforeach()
+endif()
 add_library(g1c-texture STATIC "${G1C_ROOT}/src/TextureAdapter.cpp"
     "${G1C_REPO}/components/misc/resourcehelpers.cpp")
 target_include_directories(g1c-texture PUBLIC "${G1C_ROOT}/src"
