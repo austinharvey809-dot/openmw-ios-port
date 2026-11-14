@@ -3,8 +3,14 @@
 Prepared 2026-11-14 on `ios-port`, base `7de7ac7a85f6bd616ceaff2362d8c10c03623125`.
 G1C physical textured rendering is complete **as independently verified and
 reported by the user**. This new slice does not change that implementation.
-G1D native compilation, genuine parsing of the private model and phone rendering
-are **unverified**. No build was dispatched, staged, committed or pushed here.
+The first G1D build was installed on the phone. Session
+`714C5D18-819B-4988-BBA1-175F8E11D8C6`, source
+`5a94bd5e7328141aa17111598d54fd386989c742`, failed during property conversion
+before any OSG frame. The review fix described in
+[RUG-COMPATIBILITY-REVIEW.md](RUG-COMPATIBILITY-REVIEW.md) is locally validated,
+but its native compilation and physical rendering remain **unverified**.
+Independent source review approved this correction and authorized native Build #2.
+The resulting CI and physical-device evidence must be reviewed separately.
 
 ## Selected real target and inspected dependencies
 
@@ -13,8 +19,10 @@ Read-only inspection of the user's Steam installation on A: selected the base
 `meshes/f/furn_rug_02.nif` in the original `Morrowind.bsa`.
 The model is 1,103 bytes, SHA-256
 `b61c28bfa7e45d8d91cf82da72396c66d8bac32effbd6bf38f1d8aaf1b6b8534`.
-Bounded layout inspection found six core record types: NiNode, NiTriShape,
-NiTriShapeData, NiTexturingProperty, NiSourceTexture, NiMaterialProperty;
+Complete sequential bounded layout inspection found seven records: NiNode,
+NiTriShape, NiVertexColorProperty, NiTexturingProperty, NiSourceTexture,
+NiMaterialProperty and NiTriShapeData. The original six-type diagnostic omitted
+NiVertexColorProperty; it was not a complete inventory. The geometry has
 12 vertices, 12 triangles, 36 indices, normals and one UV set. These are
 **diagnostic layout findings, not claimed results from the genuine C++ reader**.
 The material's diffuse is (1,1,1), alpha 1, specular/emissive zero, gloss zero.
@@ -44,11 +52,15 @@ decompression mechanism; no device BC/S3TC extension is assumed. DDS/TGA origin
 handling follows ImageManager's top-left convention. A real DDS must decode;
 there is no warning texture or synthetic geometry fallback.
 
-This remains an **opaque, unlit diffuse/base-texture slice**: no lighting,
-specular/emissive materials, alpha blending, animation, skinning, extra texture
-layers, strips, vertex colors or special node types are claimed. Unsupported
-features fail explicitly. Linear base-level sampling is deliberate; original
-mip chains/filter modes and full game lighting are not yet reproduced.
+This remains an **unlit diffuse/base-texture slice**: no scene lighting,
+emissive materials, animation, skinning, extra texture
+layers, strips or special node types are claimed. SrcIgnore and ambient/diffuse
+vertex-color selection, MW-disabled specular, inherited depth and face state,
+and alpha blending/testing are supported. Enabled stencil and emission modes
+still fail explicitly. Modulate and MW Hilight use the diffuse shader path.
+Nearest/linear/mip filter modes 0-5 and wrap flags are honored; CPU-expanded
+RGBA uses generated mips instead of the original compressed DDS mip chain.
+Full game lighting and native texture quality remain separate acceptance work.
 
 The full upstream [NifOsg::Loader](https://github.com/OpenMW/openmw/blob/master/components/nifosg/nifloader.cpp)
 and local ImageManager/SceneManager were inspected. The full loader includes
@@ -105,22 +117,26 @@ and reopens the IPA. Real assets are imported afterward into Documents.
 
 ## Validation and native handoff
 
-Local: seven Python policy/fixture tests pass; all new Python files parse.
+Local correction: 21 G1D Python policy/layout tests and 138 completed-milestone
+regressions pass; all seven G1D Python files parse. ESSL 300 syntax and linking
+pass the Khronos validator (not an ANGLE/GPU execution test).
 Self-authored fixture generation is deterministic. Workflow Bash/Python syntax
 checks and Git whitespace pass. Completed sources and all nine dirty Build #15
 files are preserved; original ESM/BSA copy/content hashes match after export.
 
-Not executed locally: C++ host compilation, genuine parsing of either the new
-fixtures or real rug, DDS CPU decompression in the new adapter, iPhoneOS
+Not executed locally for this correction: C++ host compilation, genuine parsing
+of the expanded fixtures or real rug, DDS CPU decompression, iPhoneOS
 compilation/linking, new bundle/IPA checks or device rendering. The available
 Windows environment has Python and portable CMake but no suitable Apple C++
 toolchain. These are **unverified**, not passed.
 
 The host CMake root builds `openmw-real-model-check`. `ctest -R '^g1d-' -V`
-requires a self-authored seven-record/two-triangle hierarchy with a translated
-child and DXT3 texture, checks world bounds and owned decoded pixels, and rejects
-cycles, nonfinite transforms, bad indices, unsafe paths, missing images and bad
-DDS. These native tests are prepared but unexecuted. Public fixtures are generated
+requires 17 positive and 24 negative self-authored cases. They exercise the
+two-triangle translated hierarchy and DXT3 texture, owned bounds/pixels,
+inherited and overridden properties, vertex color selection, depth/culling,
+blend/sort/alpha-test state, filtering and contextual failure diagnostics.
+Original geometry/path/image negative cases remain. These expanded native tests
+are prepared but unexecuted. Public fixtures are generated
 from source; no original game bytes are used in reproducible tests.
 
 Private native command, after building on a suitable host:

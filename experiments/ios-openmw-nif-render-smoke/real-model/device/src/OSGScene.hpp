@@ -91,8 +91,18 @@ precision mediump float;
 in vec4 color;
 in vec2 uv;
 uniform sampler2D baseTexture;
+uniform int alphaTestMode;
+uniform float alphaThreshold;
 out vec4 result;
-void main() { result=texture(baseTexture, uv)*color; }
+void main() {
+    result=texture(baseTexture, uv)*color;
+    float a=result.a;
+    bool pass=alphaTestMode==0 || (alphaTestMode==1 && a<alphaThreshold)
+        || (alphaTestMode==2 && a==alphaThreshold) || (alphaTestMode==3 && a<=alphaThreshold)
+        || (alphaTestMode==4 && a>alphaThreshold) || (alphaTestMode==5 && a!=alphaThreshold)
+        || (alphaTestMode==6 && a>=alphaThreshold);
+    if (!pass) discard; // mode 7 is NEVER; test final texture * color alpha.
+}
 )"));
             program->addBindAttribLocation("osg_Vertex", 0);
             program->addBindAttribLocation("osg_Color", 3);
