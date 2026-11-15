@@ -1,5 +1,36 @@
 # G4 genuine world integration foundation
 
+## Build #2 JPEG cross-compilation correction
+
+Build #1 reached G4 application compilation but failed while configuring the
+genuine pinned libjpeg-turbo ExternalProject. With CMAKE_SYSTEM_NAME=iOS,
+CMake expects the caller to provide the processor; it can remain empty despite
+CMAKE_OSX_ARCHITECTURES=arm64. The old conditional forwarding omitted that empty
+value, and upstream's unquoted string(TOLOWER ...) lost an argument.
+
+The JPEG recipe now derives CMAKE_SYSTEM_PROCESSOR=arm64 from the explicit
+single ARM64 iPhoneOS target and rejects conflicting processor/SDK/architecture
+settings. It preserves the selected SDK, deployment target 18.0, compiler,
+archive tools, static linking and original dependency pins. Host processor
+selection is retained for genuine host regression builds.
+
+The native preflight now runs before either application's compilation. It
+configures the real JPEG ExternalProject first, then builds JPEG, yaml-cpp,
+zlib, portable libpng and Boost program_options. These other dependencies use
+the parent toolchain; MyGUI is headers-only and is checked through consumer
+compilation. The gate checks actual JPEG cache/system/compile settings and all
+new dependency compiler commands, then independently examines every static
+archive member for thin ARM64 MH_OBJECT and iPhoneOS 18.0 LC_BUILD_VERSION.
+Host, simulator, universal, missing-platform and malformed objects fail. Final
+executable, bundle and IPA checks are retained independently.
+
+Local validation: 35 Python tests, including actual CMake argument forwarding
+with an empty target processor and an unrelated host CPU; real pinned JPEG
+Windows configuration/build; and a real cross-Clang authored ARM64/iOS object
+archive accepted by the inspector. Actual Apple-built dependency archives and
+the complete G4 application remain unverified until Build #2 executes. No G4
+physical, full-engine or mod compatibility acceptance is inferred.
+
 Status: independent source review conditionally approved; focused corrections
 and supplemental Windows CPU validation completed for authorized native Build #1.
 G4 iPhoneOS compilation, IPA packaging, GPU rendering and physical acceptance

@@ -1,9 +1,105 @@
 """Portable boundary regressions; no Apple SDK or physical acceptance claims."""
-import hashlib,io,json,plistlib,stat,sys,tempfile,unittest,zipfile
+import hashlib,io,json,os,plistlib,shutil,stat,struct,subprocess,sys,tempfile,unittest,zipfile
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import fixtures,native_preflight,package,paths,prepare_dependencies,prepare_shaders,private_profile,provenance,run_cases
+import dependency_preflight
+
+
+class DependencyTests(unittest.TestCase):
+    def cmake_platform(self,processor='',arch='arm64',sdk='/SDK path/iPhoneOS27.0.sdk',system='iOS'):
+        cmake=os.environ.get('OPENMW_TEST_CMAKE') or shutil.which('cmake')
+        if not cmake:self.skipTest('CMake required for actual platform forwarding regression')
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);output=(root/'args.txt').as_posix()
+            script=root/'platform.cmake'
+            values={'CMAKE_SYSTEM_NAME':system,'CMAKE_HOST_SYSTEM_PROCESSOR':'x86_64','CMAKE_SYSTEM_PROCESSOR':processor,
+                'CMAKE_OSX_ARCHITECTURES':arch,'CMAKE_OSX_SYSROOT':sdk,'CMAKE_OSX_DEPLOYMENT_TARGET':'18.0'}
+            script.write_text(''.join('set('+name+' "'+value+'")\n' for name,value in values.items())+
+                'include("'+(paths.ROOT/'cmake/jpeg_platform.cmake').as_posix()+'")\n'+
+                'g4_jpeg_platform_arguments(arguments)\nstring(REPLACE ";" "\\n" text "${arguments}")\nfile(WRITE "'+output+'" "${text}")\n')
+            result=subprocess.run([cmake,'-P',str(script)],capture_output=True,text=True)
+            return result,(root/'args.txt').read_text().splitlines() if (root/'args.txt').exists() else []
+    def test_ios_empty_processor_uses_explicit_target_not_host(self):
+        result,args=self.cmake_platform()
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('-DCMAKE_SYSTEM_PROCESSOR:STRING=arm64',args)
+        self.assertIn('-DCMAKE_OSX_SYSROOT:STRING=/SDK path/iPhoneOS27.0.sdk',args)
+        self.assertIn('-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=18.0',args)
+        self.assertFalse(any('x86_64' in arg for arg in args))
+    def test_cross_target_conflicts_fail(self):
+        for options in ({'processor':'x86_64'},{'arch':'x86_64'},{'arch':'arm64;x86_64'},{'arch':''},{'sdk':'/SDK/iPhoneSimulator.sdk'}):
+            with self.subTest(options=options):self.assertNotEqual(self.cmake_platform(**options)[0].returncode,0)
+    def test_host_processor_preserved(self):
+        result,args=self.cmake_platform(system='Windows',processor='AMD64',arch='',sdk='')
+        self.assertEqual(result.returncode,0,result.stderr);self.assertIn('-DCMAKE_SYSTEM_PROCESSOR:STRING=AMD64',args)
+    @staticmethod
+    def object(platform=2,minimum=18<<16,cpu=0x0100000c,kind=1,duplicate=False):
+        load=struct.pack('<6I',0x32,24,platform,minimum,0,0)
+        return struct.pack('<8I',0xfeedfacf,cpu,0,kind,2 if duplicate else 1,len(load)*(2 if duplicate else 1),0,0)+load*(2 if duplicate else 1)
+    @staticmethod
+    def archive(members,bsd=False):
+        result=b'!<arch>\n'
+        for name,body in members:
+            encoded=name.encode();payload=encoded+body if bsd else body
+            stored=('#1/'+str(len(encoded))) if bsd else name+'/'
+            header=(f'{stored:<16}{0:<12}{0:<6}{0:<6}{"100644":<8}{len(payload):<10}`\n').encode()
+            result+=header+payload+(b'\n' if len(payload)%2 else b'')
+        return result
+    def test_real_archive_member_traversal_and_platform(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'jpeg.a'
+            for bsd in (False,True):
+                path.write_bytes(self.archive([('__.SYMDEF',b'symbols'),('codec-long-name.c.o' if bsd else 'codec.c.o',self.object())],bsd=bsd))
+                report=dependency_preflight.inspect_archive(path)
+                self.assertEqual(report['objects'],1);self.assertEqual(report['platform'],'iPhoneOS')
+    def test_every_object_is_checked_and_host_simulator_cannot_pass(self):
+        for changes in ({'platform':1},{'platform':7},{'cpu':0x01000007},{'minimum':17<<16},{'kind':2},{'duplicate':True}):
+            with self.subTest(changes=changes),tempfile.TemporaryDirectory() as temp:
+                path=Path(temp)/'jpeg.a';path.write_bytes(self.archive([('good.o',self.object()),('wrong.o',self.object(**changes))]))
+                with self.assertRaises(ValueError):dependency_preflight.inspect_archive(path)
+    def test_missing_truncated_and_empty_archives_fail(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'jpeg.a'
+            with self.assertRaisesRegex(ValueError,'Missing'):dependency_preflight.inspect_archive(path)
+            for data in (b'!<arch>\n',b'not an archive',self.archive([('bad.o',b'text')]),self.archive([('valid.o',self.object())])[:-4]):
+                path.write_bytes(data)
+                with self.assertRaises(ValueError):dependency_preflight.inspect_archive(path)
+    def test_native_dependency_gate_cannot_pass_on_windows(self):
+        with patch.object(dependency_preflight.sys,'platform','win32'),self.assertRaisesRegex(ValueError,'genuine Apple'):
+            dependency_preflight.run(Path('.'),Path('.'),Path('.'))
+    def test_external_configure_and_archive_check_precede_engine(self):
+        source=(paths.ROOT/'tools/native_preflight.py').read_text()
+        self.assertLess(source.index('dependency_preflight.run'),source.index('for index,entry in enumerate(selected)'))
+        source=(paths.ROOT/'tools/dependency_preflight.py').read_text()
+        self.assertIn('g4-jpeg-build-configure',source);self.assertIn('inspect_archive(Path(path))',source)
+        workflow=provenance.WORKFLOW.read_text()
+        self.assertLess(workflow.index('id: g4_preflight'),workflow.index('name: Compile and link genuine device geometry executable'))
+    def test_dependency_cache_and_compiler_arguments_must_agree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);sdk=root/'iPhoneOS.sdk';sdk.mkdir();jpeg=root/'g4-deps/jpeg';jpeg.mkdir(parents=True)
+            parent={'CMAKE_C_COMPILER':'/usr/bin/cc','CMAKE_AR':'/usr/bin/ar','CMAKE_RANLIB':'/usr/bin/ranlib',
+                'CMAKE_MAKE_PROGRAM':'/usr/bin/make','CMAKE_BUILD_TYPE':'Release'}
+            child={**parent,'CMAKE_SYSTEM_NAME':'iOS','CMAKE_SYSTEM_PROCESSOR':'arm64','CMAKE_OSX_ARCHITECTURES':'arm64',
+                'CMAKE_OSX_DEPLOYMENT_TARGET':'18.0','CMAKE_OSX_SYSROOT':str(sdk),'ENABLE_STATIC':'ON','ENABLE_SHARED':'OFF',
+                'WITH_SIMD':'OFF','WITH_TURBOJPEG':'OFF','WITH_TOOLS':'OFF','WITH_TESTS':'OFF'}
+            write=lambda path,values:path.write_text(''.join(n+':STRING='+v+'\n' for n,v in values.items()))
+            write(root/'CMakeCache.txt',parent);write(jpeg/'CMakeCache.txt',child)
+            system=jpeg/'CMakeFiles/test-version/CMakeSystem.cmake';system.parent.mkdir(parents=True)
+            system.write_text('set(CMAKE_SYSTEM_PROCESSOR "arm64")\n')
+            command={'file':'codec.c','arguments':['/usr/bin/cc','-arch','arm64','-isysroot',str(sdk),'-miphoneos-version-min=18.0','-c','codec.c']}
+            (jpeg/'compile_commands.json').write_text(json.dumps([command]))
+            (root/'compile_commands.json').write_text(json.dumps([{**command,'output':'CMakeFiles/g4-png.dir/file'+str(i)+'.o'} for i in range(30)]))
+            self.assertEqual(dependency_preflight.configured(root,sdk)['processor'],'arm64')
+            for name,value in (('CMAKE_SYSTEM_PROCESSOR',''),('CMAKE_AR','/wrong/ar'),('ENABLE_SHARED','ON')):
+                with self.subTest(name=name):
+                    write(jpeg/'CMakeCache.txt',{**child,name:value})
+                    with self.assertRaises(ValueError):dependency_preflight.configured(root,sdk)
+            write(jpeg/'CMakeCache.txt',child)
+            command['arguments']+=['-miphoneos-version-min=17.0']
+            (jpeg/'compile_commands.json').write_text(json.dumps([command]))
+            with self.assertRaisesRegex(ValueError,'deployment'):dependency_preflight.configured(root,sdk)
 
 
 class PrivateProfileTests(unittest.TestCase):

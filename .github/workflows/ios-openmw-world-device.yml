@@ -381,6 +381,28 @@ jobs:
             "$(sed -n '1p' "$BUILD_DIR/g1c-products-Release.txt")" \
             "$(sed -n '2p' "$BUILD_DIR/g1c-products-Release.txt")" \
             "$(sed -n '3p' "$BUILD_DIR/g1c-products-Release.txt")" >> "$GITHUB_ENV"
+      - name: Configure G4 genuine world application
+        id: g4_configure
+        run: |
+          set -euo pipefail
+          REAL="$OPENMW_SOURCE/$WORLD"
+          REAL_BUILD="$RUNNER_TEMP/g4-device-build"
+          cmake -S "$REAL/device" -B "$REAL_BUILD" -G 'Unix Makefiles' \
+            -DG4_DEPENDENCIES_SOURCE="$RUNNER_TEMP/openmw-g4-dependencies" \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DANGLE_ROOT="$ANGLE_ROOT" -DOSG_SOURCE="$OSG_RENDERER" \
+            -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tee "$EVIDENCE/g4-configure.log"
+          python3 "$REAL/tools/provenance.py" --configured "$REAL_BUILD" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" > "$EVIDENCE/g4-configured-audit.json" 2> "$EVIDENCE/g4-configured-audit-errors.log"
+      - name: Configure build and inspect genuine dependency archives; compile new Apple consumers
+        id: g4_preflight
+        run: |
+          set -euo pipefail
+          REAL="$OPENMW_SOURCE/$WORLD"
+          REAL_BUILD="$RUNNER_TEMP/g4-device-build"
+          python3 "$REAL/tools/native_preflight.py" --build "$REAL_BUILD" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --output "$EVIDENCE/g4-early-compile" > "$EVIDENCE/g4-early-compile.json" 2> "$EVIDENCE/g4-early-compile-errors.log"
       - name: Compile and link genuine device geometry executable
         id: link
         run: |
@@ -418,28 +440,6 @@ jobs:
           python3 "$OPENMW_SOURCE/$TEXTURED/tools/package_textured.py" reopen \
             --product "$EVIDENCE/IOSOpenMWTexturedNif-unsigned.ipa" --prepared "$BUILD_DIR/prepared" \
             --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --evidence "$EVIDENCE"
-      - name: Configure G4 genuine world application
-        id: g4_configure
-        run: |
-          set -euo pipefail
-          REAL="$OPENMW_SOURCE/$WORLD"
-          REAL_BUILD="$RUNNER_TEMP/g4-device-build"
-          cmake -S "$REAL/device" -B "$REAL_BUILD" -G 'Unix Makefiles' \
-            -DG4_DEPENDENCIES_SOURCE="$RUNNER_TEMP/openmw-g4-dependencies" \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
-            -DANGLE_ROOT="$ANGLE_ROOT" -DOSG_SOURCE="$OSG_RENDERER" \
-            -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tee "$EVIDENCE/g4-configure.log"
-          python3 "$REAL/tools/provenance.py" --configured "$REAL_BUILD" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" > "$EVIDENCE/g4-configured-audit.json" 2> "$EVIDENCE/g4-configured-audit-errors.log"
-      - name: Compile new consumers against the real Apple SDK before the full library build
-        id: g4_preflight
-        run: |
-          set -euo pipefail
-          REAL="$OPENMW_SOURCE/$WORLD"
-          REAL_BUILD="$RUNNER_TEMP/g4-device-build"
-          python3 "$REAL/tools/native_preflight.py" --build "$REAL_BUILD" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" --output "$EVIDENCE/g4-early-compile" > "$EVIDENCE/g4-early-compile.json" 2> "$EVIDENCE/g4-early-compile-errors.log"
       - name: Compile and link genuine G4 world UIKit application
         id: g4_build
         run: |

@@ -32,12 +32,8 @@ include(ExternalProject)
 set(_jpeg_binary "${CMAKE_CURRENT_BINARY_DIR}/g4-deps/jpeg")
 file(MAKE_DIRECTORY "${_jpeg_binary}")
 set(_jpeg_archive "${_jpeg_binary}/${CMAKE_STATIC_LIBRARY_PREFIX}jpeg${CMAKE_STATIC_LIBRARY_SUFFIX}")
-set(_jpeg_platform)
-foreach(_variable CMAKE_SYSTEM_NAME CMAKE_SYSTEM_PROCESSOR CMAKE_OSX_SYSROOT CMAKE_OSX_ARCHITECTURES CMAKE_OSX_DEPLOYMENT_TARGET)
-  if(DEFINED ${_variable} AND NOT "${${_variable}}" STREQUAL "")
-    list(APPEND _jpeg_platform "-D${_variable}=${${_variable}}")
-  endif()
-endforeach()
+include("${G4_ROOT}/cmake/jpeg_platform.cmake")
+g4_jpeg_platform_arguments(_jpeg_platform)
 ExternalProject_Add(g4-jpeg-build
   SOURCE_DIR "${G4_DEPENDENCIES_SOURCE}/jpeg" BINARY_DIR "${_jpeg_binary}"
   DOWNLOAD_COMMAND "" UPDATE_COMMAND "" INSTALL_COMMAND ""
@@ -50,6 +46,7 @@ ExternalProject_Add(g4-jpeg-build
     -DENABLE_STATIC=ON -DENABLE_SHARED=OFF -DWITH_SIMD=OFF -DWITH_TURBOJPEG=OFF -DWITH_TOOLS=OFF -DWITH_TESTS=OFF ${_jpeg_platform}
   BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --target jpeg-static --parallel 3
   BUILD_BYPRODUCTS "${_jpeg_archive}" EXCLUDE_FROM_ALL TRUE)
+ExternalProject_Add_StepTargets(g4-jpeg-build configure)
 add_library(jpeg-static STATIC IMPORTED GLOBAL)
 set_target_properties(jpeg-static PROPERTIES IMPORTED_LOCATION "${_jpeg_archive}")
 add_dependencies(jpeg-static g4-jpeg-build)
@@ -58,3 +55,7 @@ add_library(g4-boost-options STATIC ${_boost_options})
 target_include_directories(g4-boost-options PUBLIC "${G4_DEPENDENCIES_SOURCE}/boost")
 target_compile_definitions(g4-boost-options PUBLIC BOOST_ALL_NO_LIB BOOST_PROGRAM_OPTIONS_STATIC_LINK)
 target_compile_features(g4-boost-options PUBLIC cxx_std_20)
+# Inspect these actual archives before compiling the long OSG/engine closure.
+# Use target-derived paths, including libjpeg's real external build product.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/g4-dependencies-$<CONFIG>.json"
+  CONTENT "{\n  \"jpeg\": \"$<TARGET_FILE:jpeg-static>\",\n  \"yaml\": \"$<TARGET_FILE:yaml-cpp>\",\n  \"zlib\": \"$<TARGET_FILE:zlibstatic>\",\n  \"png\": \"$<TARGET_FILE:g4-png>\",\n  \"boost_program_options\": \"$<TARGET_FILE:g4-boost-options>\"\n}\n")
