@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.24)
+project(OpenMWExterior LANGUAGES CXX)
+# Keep the consumer directory bound while pinned OSG changes its macOS cache flags.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+get_filename_component(G3_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
+add_subdirectory("${G3_ROOT}/../ios-openmw-interior-smoke" "${CMAKE_CURRENT_BINARY_DIR}/interior" EXCLUDE_FROM_ALL)
+include(common.cmake)
+add_executable(openmw-exterior-check tests/exterior_check.cpp)
+target_link_libraries(openmw-exterior-check PRIVATE g3-world)
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+enable_testing()
+add_test(NAME g3-exterior-terrain-physics COMMAND "${Python3_EXECUTABLE}" "${G3_ROOT}/tools/run_cases.py" --binary "$<TARGET_FILE:openmw-exterior-check>")

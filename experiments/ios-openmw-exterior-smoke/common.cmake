@@ -1,0 +1,28 @@
+get_filename_component(G3_REPO "${G3_ROOT}/../.." ABSOLUTE)
+set(G3_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/g3-generated")
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${G3_ROOT}/tools/mesh_bridge.py" --output "${G3_GENERATED}" COMMAND_ERROR_IS_FATAL ANY)
+get_target_property(_g3_osg_binary osg BINARY_DIR)
+get_filename_component(_g3_osg_include "${_g3_osg_binary}/../../include" ABSOLUTE)
+if(NOT USE_DOUBLE_PRECISION)
+  message(FATAL_ERROR "G3 requires the unchanged double-precision Bullet provider")
+endif()
+foreach(_bullet_target BulletDynamics BulletCollision LinearMath)
+  if(NOT TARGET ${_bullet_target})
+    message(FATAL_ERROR "G3 is missing ${_bullet_target}")
+  endif()
+  target_compile_definitions(${_bullet_target} PUBLIC BT_USE_DOUBLE_PRECISION)
+endforeach()
+add_library(g3-world STATIC "${G3_ROOT}/src/Exterior.cpp" "${G3_ROOT}/src/Terrain.cpp" "${G3_ROOT}/src/Physics.cpp"
+  "${G3_GENERATED}/WorldMesh.cpp" "${G3_REPO}/components/sceneutil/material.cpp"
+  "${G3_REPO}/components/esm3/loadland.cpp" "${G3_REPO}/components/esm3/loadltex.cpp"
+  "${G3_REPO}/components/nifbullet/bulletnifloader.cpp" "${G3_REPO}/components/resource/bulletshape.cpp"
+  "${G3_REPO}/components/terrain/buffercache.cpp")
+target_include_directories(g3-world BEFORE PUBLIC "${_g3_osg_include}")
+target_include_directories(g3-world PUBLIC "${G3_ROOT}/src" "${G0_BULLET_SOURCE}/src")
+target_link_libraries(g3-world PUBLIC g2-cell BulletDynamics BulletCollision LinearMath)
+target_compile_definitions(g3-world PUBLIC BT_USE_DOUBLE_PRECISION)
+target_compile_features(g3-world PUBLIC cxx_std_20)
+set_target_properties(g3-world PROPERTIES CXX_EXTENSIONS OFF)
+file(MAKE_DIRECTORY "${G3_GENERATED}")
+file(WRITE "${G3_GENERATED}/osg-include.txt" "${_g3_osg_include}\n")
