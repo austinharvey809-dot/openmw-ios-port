@@ -14,6 +14,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <utility>
+#include "GeometryAdapter.hpp"
 #include "OSGScene.hpp"
 #include "GLDebugCapture.hpp"
 #include "NifProbe.hpp"

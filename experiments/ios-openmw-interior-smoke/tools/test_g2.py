@@ -14,6 +14,19 @@ def mesh(mode):
     raise ValueError('Missing authored NIF')
 
 class InteriorContracts(unittest.TestCase):
+    def test_device_digest_explicitly_uses_the_accepted_hash_owner(self):
+        main=(bridge.ROOT/'device/src/main.mm').read_text()
+        cmake=(bridge.ROOT/'device/CMakeLists.txt').read_text()
+        owner=bridge.REPO/'experiments/ios-openmw-nif-render-smoke'
+        self.assertIn('#include "GeometryAdapter.hpp"',main)
+        self.assertIn('G1A::sha256(',main)
+        self.assertIn('std::string sha256(const std::string& bytes);',(owner/'src/GeometryAdapter.hpp').read_text())
+        self.assertIn('target_link_libraries(IOSOpenMWInterior PRIVATE g2-cell g1b-geometry ${_links})',cmake)
+        target=(owner/'device/CMakeLists.txt').read_text()
+        self.assertIn('add_library(g1b-geometry STATIC "${CMAKE_CURRENT_SOURCE_DIR}/../src/GeometryAdapter.cpp"',target)
+        self.assertIn('target_include_directories(g1b-geometry PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../src"',target)
+        self.assertIn('std::string sha256(const std::string& bytes)',(owner/'src/GeometryAdapter.cpp').read_text())
+
     def test_authored_inputs_are_deterministic(self):
         for mode in (*fixtures.POSITIVE,*fixtures.NEGATIVE):
             with self.subTest(mode=mode):self.assertEqual(fixtures.inputs(mode),fixtures.inputs(mode))

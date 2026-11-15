@@ -10,7 +10,9 @@ get_target_property(_includes IOSOpenMWRealModel INCLUDE_DIRECTORIES)
 get_target_property(_links IOSOpenMWRealModel LINK_LIBRARIES)
 list(REMOVE_ITEM _links g1d-model)
 target_include_directories(IOSOpenMWInterior PRIVATE ${_includes} "${G2_GENERATED}")
-target_link_libraries(IOSOpenMWInterior PRIVATE g2-cell ${_links})
+# Digest calls the accepted G1A::sha256 implementation compiled by this target.
+# Keep its declaration/include interface and link ownership explicit.
+target_link_libraries(IOSOpenMWInterior PRIVATE g2-cell g1b-geometry ${_links})
 target_include_directories(g2-cell BEFORE PUBLIC "${_g2_osg_include}" "${ANGLE_ROOT}/include")
 set_source_files_properties("${G2_GENERATED}/g2-build.json" PROPERTIES MACOSX_PACKAGE_LOCATION ".")
 target_sources(IOSOpenMWInterior PRIVATE "${G2_GENERATED}/g2-build.json")
