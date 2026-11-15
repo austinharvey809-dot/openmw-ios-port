@@ -3,6 +3,8 @@
 #include "GLES3Terrain.hpp"
 #include "InputProfile.hpp"
 #include "Notifications.hpp"
+#include "GLCapabilities.hpp"
+#include <osgViewer/GraphicsWindow>
 #include <components/debug/debuglog.hpp>
 #include <osgDB/Registry>
 #include <iostream>
@@ -42,6 +44,20 @@ int main(int argc,char** argv){
     try{
         if(argc<4||argc>5)throw std::runtime_error("data-directory shaders case [shader-output] required");
         const std::filesystem::path directory=argv[1];const std::string mode=argv[3];
+        if(mode=="startup-capabilities"){
+            // Genuine pinned OSG, no current context and no mocked capabilities.
+            // The old operation dereferenced this null pointer before any frame.
+            osg::ref_ptr<osgViewer::GraphicsWindowEmbedded> window=new osgViewer::GraphicsWindowEmbedded(0,0,1,1);
+            require(window->getState()!=nullptr,"Embedded window has no state");
+            require(window->getState()->get<osg::GLExtensions>()==nullptr,"Fresh embedded extensions unexpectedly initialized");
+            rejection([&]{G4::registerGLCapabilities(window);},"extension procedures are uninitialized");
+            rejection([&]{G4::registerGLCapabilities(nullptr);},"missing graphics context/state");
+            std::vector<std::string> stages;
+            rejection([&]{G4::initializeGLCapabilities(window,[&](const auto& stage){stages.push_back(stage);});},"no current GL context");
+            require(stages.empty(),"Initialization began without a genuine current context");
+            require(!SceneUtil::glExtensionsReady(),"Rejected bootstrap published fake capabilities");
+            require(window->getState()->get<osg::GLExtensions>()==nullptr,"Rejection mutated extension ownership");
+        }
         std::vector<std::filesystem::path> content={directory/"Morrowind.esm"};
         if(std::filesystem::is_regular_file(directory/"Authored.esp"))content.push_back(directory/"Authored.esp");
         if(mode=="load-order")std::reverse(content.begin(),content.end());

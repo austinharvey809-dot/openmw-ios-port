@@ -306,6 +306,38 @@ class PackagingTests(unittest.TestCase):
 
 
 class Contracts(unittest.TestCase):
+    def test_embedded_capabilities_initialized_before_upstream_registration(self):
+        helper=(paths.ROOT/'src/GLCapabilities.hpp').read_text()
+        self.assertLess(helper.index('state.initializeExtensionProcs();'),helper.index('registerGLCapabilities(context);'))
+        registration=helper.split('inline void registerGLCapabilities',1)[1].split('inline void initializeGLCapabilities',1)[0]
+        self.assertLess(registration.index('get<osg::GLExtensions>()'),registration.index('operation(context)'))
+        device=(paths.ROOT/'device/src/OSGScene.hpp').read_text()
+        self.assertIn('G4::initializeGLCapabilities(window,checkpoint)',device)
+        self.assertNotIn('extensions(window)',device)
+        self.assertIn('startup-capabilities',fixtures.POSITIVE)
+    def test_startup_evidence_precedes_renderer_and_is_separate_from_worker_report(self):
+        source=(paths.ROOT/'device/src/main.mm').read_text()
+        view=source.split('- (void)viewDidLoad {',1)[1].split('- (void)beginPreparation {',1)[0]
+        self.assertIn('[self exportResults]',view)
+        self.assertIn('@"parser_geometry_ready":@NO',view)
+        self.assertIn('G4Expected::Commit',view)
+        self.assertIn('@"g4-startup.json"',source)
+        self.assertIn('if(events.count>128)',source)
+        self.assertIn('NSJSONWritingSortedKeys error:&error',source)
+        self.assertIn('@catch(NSException* exception)',source)
+        self.assertIn('isEqualToString:startupSession',source)
+        self.assertIn('PrepareWorld(report,startupSession)',source)
+        activation=source.split('- (void)activate {',1)[1].split('- (void)deactivate {',1)[0]
+        self.assertLess(activation.index('renderer->start('),activation.index('[self beginPreparation]'))
+    def test_debug_capture_retains_deferred_logging_and_bounded_storage(self):
+        # Guard the accepted shared implementation rather than disabling debugging.
+        capture=(paths.REPO/'experiments/ios-openmw-nif-render-smoke/device/baseline/src/GLDebugCapture.hpp').read_text()
+        callback=capture.split('static void GL_APIENTRY capture(',1)[1].split('bool ownsCurrentContext()',1)[0]
+        self.assertNotIn('Log(',callback);self.assertNotIn('glGetError(',callback)
+        self.assertIn('std::memcpy',callback);self.assertIn('noexcept',callback)
+        renderer=(paths.REPO/'experiments/ios-openmw-nif-render-smoke/device/src/AngleRenderer.hpp').read_text()
+        self.assertIn('callback storage outlives explicit EGL teardown',renderer)
+        self.assertLess(renderer.index('eglDestroyContext(display, context)'),renderer.index('eglTerminate(display)'))
     def test_device_shader_acceptance_precedes_publication(self):
         source=(paths.ROOT/'src/Session.cpp').read_text()
         self.assertLess(source.index('accept(*ready.area)'),source.index('root->removeChild(current->scene)'))

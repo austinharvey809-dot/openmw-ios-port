@@ -2,6 +2,7 @@
 #include "Session.hpp"
 #include "SceneAudit.hpp"
 #include "Notifications.hpp"
+#include "GLCapabilities.hpp"
 #include <components/fallback/fallback.hpp>
 #include <components/misc/constants.hpp>
 #include <components/sceneutil/glextensions.hpp>
@@ -24,6 +25,10 @@ class OSGScene {
     std::shared_ptr<G4::Session> owned;
     unsigned compiledLoad=0;
     double previousFrame=-1,simulationTime=0;
+    static G4::StartupTrace beginNotifications(G4::StartupTrace callback){
+        if(callback)callback("G4 startup osg.notifications.begin");
+        return callback;
+    }
     void acceptArea(const G4::Area& area){
         G4::SceneAudit audit;area.scene->accept(audit);
         if(audit.programs.empty())throw std::runtime_error("G4 area contains no genuine render programs");
@@ -50,11 +55,17 @@ public:
     bool grounded()const{return owned&&owned->area().physics->grounded();}
     unsigned long long physicsSteps()const{return owned?owned->physicsSteps():0;}
     double droppedPhysicsSeconds()const{return owned?owned->droppedPhysicsSeconds():0;}
-    explicit OSGScene(std::function<void(const std::string&)> callback):notifications(std::move(callback)){
+    explicit OSGScene(std::function<void(const std::string&)> callback):notifications(beginNotifications(std::move(callback))){
+        const auto checkpoint=[this](const std::string& stage){notifications.get()->write("G4 startup "+stage);};
+        checkpoint("osg.notifications.complete");
         std::lock_guard registry(G4::CapabilityRegistryMutex);
+        checkpoint("osg.entry-points.begin");
         for(const char* name:{"glCreateShader","glBindVertexArray","glDrawElements"})
             if(!osg::getGLExtensionFuncPtr(name))throw std::runtime_error(std::string("ANGLE resolver missing ")+name);
+        checkpoint("osg.entry-points.complete");
+        checkpoint("osg.embedded-window.begin");
         window=new osgViewer::GraphicsWindowEmbedded(0,0,1,1);
+        checkpoint("osg.embedded-window.complete");
         auto* state=window->getState();state->setCheckForGLErrors(osg::State::ONCE_PER_ATTRIBUTE);
         state->setUseModelViewAndProjectionUniforms(true);state->setUseVertexAttributeAliasing(true);
         state->resetVertexAttributeAlias(false);
@@ -70,14 +81,15 @@ public:
 #else
         setenv("OPENMW_DECOMPRESS_TEXTURES","1",1);
 #endif
-        {std::lock_guard registry(G4::CapabilityRegistryMutex);
-            SceneUtil::GetGLExtensionsOperation extensions;extensions(window);}
+        G4::initializeGLCapabilities(window,checkpoint);
+        checkpoint("osg.viewer.begin");
         viewer=new osgViewer::Viewer;viewer->setThreadingModel(osgViewer::Viewer::SingleThreaded);
         viewer->setReleaseContextAtEndOfFrameHint(false);viewer->setCameraManipulator(nullptr);
         viewer->setLightingMode(osg::View::NO_LIGHT); // SceneUtil::LightManager owns lighting.
         viewer->getCamera()->setGraphicsContext(window);viewer->getCamera()->setName(Constants::SceneCamera);
         viewer->getCamera()->setClearMask(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         viewer->getCamera()->setComputeNearFarMode(osg::CullSettings::DO_NOT_COMPUTE_NEAR_FAR);
+        checkpoint("osg.viewer.complete");
     }
     void attach(std::shared_ptr<G4::Session> session){
         if(!session)throw std::runtime_error("G4 missing prepared world");
@@ -95,6 +107,7 @@ public:
             ++backgroundBusyFrames;glClearColor(.05f,.05f,.08f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);return;
         }
         bool acceptedCandidate=false;
+        if(frames==0)notifications.get()->write("G4 startup scene.first-frame.begin");
         const auto* stamp=viewer->getFrameStamp();
         owned->update(time,[&](const G4::Area& candidate){
             const bool previous=shaderLinked;shaderLinked=false;
@@ -103,8 +116,10 @@ public:
         },stamp?stamp->getReferenceTime():0);
         if(acceptedCandidate){compiledLoad=owned->loads;shaderLinked=true;}
         if(compiledLoad!=owned->loads){
+            if(frames==0)notifications.get()->write("G4 startup scene.initial-programs.begin");
             shaderLinked=false;acceptArea(owned->area());
             shaderLinked=true;compiledLoad=owned->loads;
+            if(frames==0)notifications.get()->write("G4 startup scene.initial-programs.complete");
         }
         window->resized(0,0,width,height);window->getEventQueue()->windowResize(0,0,width,height);
         auto* camera=viewer->getCamera();camera->setViewport(0,0,width,height);
@@ -121,6 +136,7 @@ public:
         previousFrame=time;
         const auto begin=std::chrono::steady_clock::now();viewer->frame(simulationTime);
         traversalWallMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();++frames;
+        if(frames==1)notifications.get()->write("G4 startup scene.first-frame.complete");
         if(frames==5)window->getState()->setCheckForGLErrors(osg::State::ONCE_PER_FRAME);
     }
     ~OSGScene(){

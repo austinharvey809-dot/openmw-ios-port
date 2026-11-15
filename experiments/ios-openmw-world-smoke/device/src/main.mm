@@ -28,6 +28,7 @@
 #include <sstream>
 
 static NSMutableDictionary *Evidence;
+static NSMutableDictionary *StartupEvidence;
 static std::mutex DiagnosticFileMutex;
 static std::atomic<unsigned> DiagnosticFileErrors{0};
 static unsigned long long SampledFootprintPeak=0;
@@ -36,16 +37,45 @@ static void Check(bool value, const char* message) { if (!value) throw std::runt
 static NSString *Documents(NSString* name) {
     return [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject stringByAppendingPathComponent:name];
 }
-static void Log(NSString* message) {
+// Caller serializes with DiagnosticFileMutex. This function never calls Log,
+// OSG or GL; it is also safe to use while logging an initialization failure.
+static void WriteJSONUnlocked(NSDictionary* value,NSString* name) {
+    NSError* error=nil;
+    NSData* data=[NSJSONSerialization dataWithJSONObject:value options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:&error];
+    if(!data||![data writeToFile:Documents(name) options:NSDataWritingAtomic error:&error]){
+        ++DiagnosticFileErrors;NSLog(@"G4 diagnostic export failed (%@): %@",name,error);
+    }
+}
+static void Log(NSString* message,NSString* startupSession=nil) {
     std::lock_guard lock(DiagnosticFileMutex);
     @autoreleasepool { @try {
-    NSString* line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], message];
+    NSString* stage=[message hasPrefix:@"G4 startup "]?[message substringFromIndex:11]:nil;
+    if([message hasPrefix:@"Identity: "])stage=@"renderer.identity.complete";
+    if([message hasPrefix:@"KHR_debug registered:"])stage=@"renderer.khr-debug.registered";
+    if(startupSession&&![StartupEvidence[@"session_id"] isEqualToString:startupSession])stage=nil;
+    if(StartupEvidence&&stage){
+        const unsigned long long sequence=[StartupEvidence[@"sequence"] unsignedLongLongValue]+1;
+        task_vm_info_data_t memory={};mach_msg_type_number_t size=TASK_VM_INFO_COUNT;
+        const bool measured=task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&memory,&size)==KERN_SUCCESS&&size>=TASK_VM_INFO_REV1_COUNT;
+        NSDictionary* event=@{@"sequence":@(sequence),@"stage":stage,
+            @"main_thread":@(NSThread.isMainThread),@"uptime_seconds":@(NSProcessInfo.processInfo.systemUptime),
+            @"physical_footprint_bytes":measured?@(memory.phys_footprint):(id)NSNull.null};
+        NSMutableArray* events=[StartupEvidence[@"events"] mutableCopy];
+        [events addObject:event];
+        if(events.count>128){[events removeObjectAtIndex:0];StartupEvidence[@"history_truncated"]=@YES;}
+        StartupEvidence[@"sequence"]=@(sequence);StartupEvidence[@"last_checkpoint"]=event;
+        StartupEvidence[@"events"]=events;
+        WriteJSONUnlocked(StartupEvidence,@"g4-startup.json");
+    }
+    NSString* line = [NSString stringWithFormat:@"%@ %@%@\n", [NSDate date], message,
+        startupSession?[NSString stringWithFormat:@" [session %@]",startupSession]:@""];
     NSLog(@"%@", message);
     NSFileHandle* file = [NSFileHandle fileHandleForWritingAtPath:Documents(@"g4-render.log")];
     if (!file) {if(![line writeToFile:Documents(@"g4-render.log") atomically:YES encoding:NSUTF8StringEncoding error:nil])++DiagnosticFileErrors;}
     else { [file seekToEndOfFile]; [file writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; [file closeFile]; }
     } @catch(NSException* exception) { (void)exception;++DiagnosticFileErrors; } }
 }
+static void StartupCheckpoint(const char* stage,NSString* session=nil) {Log([@"G4 startup " stringByAppendingString:Text(stage)],session);}
 static bool HasExtension(const char* list, const char* name) {
     if (!list) return false;
     return (" " + std::string(list) + " ").find(" " + std::string(name) + " ") != std::string::npos;
@@ -77,12 +107,14 @@ static std::string FileSHA(const std::filesystem::path& path) {
     Check(stream.eof(), "Asset read failure"); unsigned char hash[CC_SHA256_DIGEST_LENGTH];CC_SHA256_Final(hash,&ctx);
     std::ostringstream out;for(auto byte:hash)out<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(byte);return out.str();
 }
-static std::shared_ptr<G4::Session> PrepareWorld(NSMutableDictionary* report) {
+static std::shared_ptr<G4::Session> PrepareWorld(NSMutableDictionary* report,NSString* startupSession) {
     Check(!NSThread.isMainThread,"World indexing, hashing and loading must stay off the main thread");
     const auto start=std::chrono::steady_clock::now();
+    StartupCheckpoint("prepare.provenance.begin",startupSession);
     NSData* build=Read([NSBundle.mainBundle.resourceURL URLByAppendingPathComponent:@"g4-build.json"]);
     Check([Digest(build) isEqualToString:Text(G4Expected::SHA)],"G4 provenance changed");
     report[@"build"]=[NSJSONSerialization JSONObjectWithData:build options:0 error:nil];
+    StartupCheckpoint("prepare.provenance.complete",startupSession);
     NSURL* directory=[NSURL fileURLWithPath:Documents(@"Model") isDirectory:YES];
     const auto path=std::filesystem::path(directory.fileSystemRepresentation);
     G4::InputProfile profile;
@@ -110,17 +142,27 @@ static std::shared_ptr<G4::Session> PrepareWorld(NSMutableDictionary* report) {
         Check([name isKindOfClass:NSString.class]&&[files[name] isKindOfClass:NSString.class],"Invalid private hash entry");
         profile.files.emplace([(NSString*)name UTF8String],[(NSString*)files[name] UTF8String]);
     }
+    StartupCheckpoint("prepare.private-hashes.before.begin",startupSession);
     profile.verify(path,FileSHA);
+    StartupCheckpoint("prepare.private-hashes.before.complete",startupSession);
     {std::lock_guard capabilities(G4::CapabilityRegistryMutex);Check(SceneUtil::glExtensionsReady(),"Initialize genuine GL capabilities before image loading");}
     const auto loadStart=std::chrono::steady_clock::now();
     std::shared_ptr<G4::Session> session;
     {std::lock_guard registry(G4::CapabilityRegistryMutex);
+        StartupCheckpoint("prepare.world-index.begin",startupSession);
         auto index=std::make_unique<G4::WorldIndex>(profile.contentPaths(path));
+        StartupCheckpoint("prepare.world-index.complete",startupSession);
+        StartupCheckpoint("prepare.resources.begin",startupSession);
         auto resources=std::make_unique<G4::Resources>(profile.resourcePaths(path),std::filesystem::path([NSBundle.mainBundle.resourcePath UTF8String])/"Shaders");
+        StartupCheckpoint("prepare.resources.complete",startupSession);
+        StartupCheckpoint("prepare.session.begin",startupSession);
         session=std::make_shared<G4::Session>(std::move(index),std::move(resources));
+        StartupCheckpoint("prepare.session.complete",startupSession);
     }
     report[@"scene_load_wall_ms"]=@(std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-loadStart).count());
+    StartupCheckpoint("prepare.private-hashes.after.begin",startupSession);
     profile.verify(path,FileSHA);
+    StartupCheckpoint("prepare.private-hashes.after.complete",startupSession);
     report[@"private_assets"]=files;report[@"inputs_unchanged"]=@YES;
     report[@"input_verification_scope"]=@"SHA-256 before/after initial preparation; game inputs opened read-only";
     report[@"gl_capabilities_before_images"]=@YES;report[@"parser_geometry_ready"]=@YES;
@@ -178,12 +220,19 @@ static std::shared_ptr<G4::Session> PrepareWorld(NSMutableDictionary* report) {
     [self.view addGestureRecognizer:statusTap];
     UITapGestureRecognizer* reset=[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(resetCamera)];reset.numberOfTapsRequired=2;[self.view addGestureRecognizer:reset];[statusTap requireGestureRecognizerToFail:reset];
     Evidence = [@{@"session_id": NSUUID.UUID.UUIDString, @"scope": @"G4 original Seyda Neen exterior",
+        @"source_commit":Text(G4Expected::Commit),@"build_metadata_sha256":Text(G4Expected::SHA),
+        @"loading_state":@"awaiting-renderer",@"parser_geometry_ready":@NO,
         @"physical_rendering_acceptance": @"UNVERIFIED: independent screenshot/export review required",
         @"gpu_completion": NSNull.null, @"lifecycle_acceptance": NSNull.null,
         @"device_system": UIDevice.currentDevice.systemVersion} mutableCopy];
     struct utsname hardware;
     if (uname(&hardware) == 0) Evidence[@"device_machine"] = Text(hardware.machine);
     Evidence[@"started_utc"] = [[NSISO8601DateFormatter new] stringFromDate:[NSDate date]];
+    {std::lock_guard lock(DiagnosticFileMutex);
+        StartupEvidence=[@{@"session_id":Evidence[@"session_id"],@"source_commit":Text(G4Expected::Commit),
+            @"build_metadata_sha256":Text(G4Expected::SHA),
+            @"started_utc":Evidence[@"started_utc"],@"device_system":Evidence[@"device_system"],
+            @"physical_rendering_acceptance":@"UNVERIFIED",@"events":@[],@"sequence":@0} mutableCopy];}
     self.overlay = [[UILabel alloc] init];
     self.overlay.numberOfLines = 6;
     self.overlay.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightRegular];
@@ -198,21 +247,30 @@ static std::shared_ptr<G4::Session> PrepareWorld(NSMutableDictionary* report) {
         [self.overlay.heightAnchor constraintLessThanOrEqualToConstant:100]]];
     Log([NSString stringWithFormat:@"New G4 session %@; source %s; physical rendering acceptance remains unverified",
         Evidence[@"session_id"], G4Expected::Commit]);
+    StartupCheckpoint("view.ready");
+    [self exportResults]; // Persist a truthful empty snapshot BEFORE any GL/bootstrap call.
+    StartupCheckpoint("initial-evidence.attempted");
 }
 - (void)beginPreparation {
+    StartupCheckpoint("prepare.dispatch.begin");
     loading=true;Evidence[@"loading_state"]=@"hashing-and-decoding";
     [self exportResults];
     NSMutableDictionary* session=Evidence;
+    NSString* startupSession=Evidence[@"session_id"]; // Immutable token, captured before dispatch.
     NSMutableDictionary* report=[NSMutableDictionary dictionary];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0), ^{
         @autoreleasepool {
+            StartupCheckpoint("prepare.worker.begin",startupSession);
             std::shared_ptr<G4::Session> result;
             NSString* failure=nil;
-            try { result=PrepareWorld(report); }
-            catch(const std::exception& error){failure=Text(error.what()) ?: @"Interior preparation failed (non-UTF8 diagnostic)";}
+            @try {try { result=PrepareWorld(report,startupSession); }
+            catch(const std::exception& error){failure=Text(error.what()) ?: @"G4 world preparation failed (non-UTF8 diagnostic)";}
+            }@catch(NSException* exception){failure=[NSString stringWithFormat:@"G4 preparation Objective-C exception %@: %@",exception.name,exception.reason];}
+            StartupCheckpoint(failure?"prepare.worker.failed":"prepare.worker.complete",startupSession);
             dispatch_async(dispatch_get_main_queue(), ^{
                 // A disconnected old scene must not overwrite a newer session.
                 if(Evidence!=session)return;
+                StartupCheckpoint("prepare.completion.main");
                 self->loading=false;
                 if(failure){self.failure=failure;Evidence[@"loading_state"]=@"failed";Log(failure);}
                 else {
@@ -224,6 +282,7 @@ static std::shared_ptr<G4::Session> PrepareWorld(NSMutableDictionary* report) {
             });
         }
     });
+    StartupCheckpoint("prepare.dispatch.complete");
 }
 - (void)exportResults {
     if (!Evidence) return;
@@ -296,25 +355,31 @@ static std::shared_ptr<G4::Session> PrepareWorld(NSMutableDictionary* report) {
             (worldError.length ? worldError : renderer && renderer->shaderError.length ? renderer->shaderError : @"Controller: left stick move, right stick look; A jump; X door; B recovery; Y status; double tap recovery.")];
     if(loading){self.overlay.hidden=NO;}
     if(loading)self.overlay.text=@"Loading original Seyda Neen...\nControls activate after loading completes.";
-    NSData* data = [NSJSONSerialization dataWithJSONObject:Evidence options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil];
-    if (data) [data writeToFile:Documents(@"g4-render.json") atomically:YES];
+    {std::lock_guard lock(DiagnosticFileMutex);
+        @try{WriteJSONUnlocked(Evidence,@"g4-render.json");}
+        @catch(NSException* exception){++DiagnosticFileErrors;NSLog(@"G4 render JSON exception: %@",exception);}}
 }
 - (void)activate {
     [self view];[self.view layoutIfNeeded];sceneActive=true;
     if(self.failure.length)return;
-    try {
-        if(!renderer){renderer=std::make_unique<Renderer>();renderer->start((CAMetalLayer*)self.view.layer);
-            Check(renderer->sceneAvailable,"G4 EGL/OSG bootstrap failed");}
+    @try {try {
+        if(!renderer){StartupCheckpoint("renderer.allocate.begin");renderer=std::make_unique<Renderer>();
+            StartupCheckpoint("renderer.allocate.complete");StartupCheckpoint("renderer.start.begin");
+            renderer->start((CAMetalLayer*)self.view.layer);StartupCheckpoint("renderer.start.returned");
+            Check(renderer->sceneAvailable,"G4 EGL/OSG bootstrap failed");StartupCheckpoint("renderer.bootstrap.complete");}
         else if(!self.displayLink)renderer->resume();
-        if(prepared){renderer->osgScene->attach(prepared);prepared.reset();buttonsPrimed=false;}
+        if(prepared){StartupCheckpoint("scene.attach.begin");renderer->osgScene->attach(prepared);prepared.reset();buttonsPrimed=false;StartupCheckpoint("scene.attach.complete");}
         if(!preparationStarted){preparationStarted=true;[self beginPreparation];}
         if(self.displayLink)return;
         buttonsPrimed=false;
+        StartupCheckpoint("display-link.begin");
         self.displayLink=[CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
         self.displayLink.preferredFrameRateRange=CAFrameRateRangeMake(30,60,60);
         [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
         UIApplication.sharedApplication.idleTimerDisabled=YES;
-    }catch(const std::exception& error){self.failure=Text(error.what());Log(self.failure);}
+        StartupCheckpoint("display-link.complete");
+    }catch(const std::exception& error){self.failure=Text(error.what())?:@"G4 activation failed (non-UTF8 diagnostic)";Log(self.failure);StartupCheckpoint("activate.cpp-exception");}
+    }@catch(NSException* exception){self.failure=[NSString stringWithFormat:@"G4 activation Objective-C exception %@: %@",exception.name,exception.reason];Log(self.failure);StartupCheckpoint("activate.objc-exception");}
     [self exportResults];
 }
 - (void)deactivate {

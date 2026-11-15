@@ -1,5 +1,15 @@
 # G4 genuine world integration foundation
 
+## Build #3 physical startup regression / proposed Build #4
+
+Build #3 compiled, linked and packaged successfully, but physical launches stop
+after KHR_debug registration. A genuine pinned-OSG initialization-order defect
+was reproduced locally: OpenMW's capability observer receives a null extension
+pointer before State::initializeExtensionProcs(). The focused correction and
+early JSON/startup journal are prepared for review, not published or physically
+verified. See [startup investigation, evidence and Build #4 proposal](STARTUP-REGRESSION.md).
+Historical native-unverified statements below describe their original build stage.
+
 ## Build #3 GLES serializer and native coverage
 
 Build #2 passed JPEG configuration, real dependency archive validation and the

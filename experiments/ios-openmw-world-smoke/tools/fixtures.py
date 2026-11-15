@@ -7,7 +7,7 @@ old=importlib.util.module_from_spec(spec);spec.loader.exec_module(old)
 sub=old.sub;record=old.record;le=old.le
 POSITIVE=('good','multi-texture','placement','cache','unload','door','session','suspend',
           'device-rejection','maintenance-clock','cache-clock','notification-concurrency','notification-lifetime','shutdown',
-          'stream','stream-rollback','door-transition','gles-terrain','input-profile',
+          'stream','stream-rollback','door-transition','gles-terrain','input-profile','startup-capabilities',
           'plugin-override','plugin-delete','plugin-new','plugin-move','plugin-palette','loose-override','last-bsa-wins')
 NEGATIVE={'missing-master':'missing or out-of-order master','load-order':'missing or out-of-order master',
           'duplicate-content':'duplicate content filename','deleted-cell':'deleted CELL unsupported',
