@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "note": "G4-only additions; accepted OSG, ANGLE and Bullet pins are unchanged. yaml pin is inherited from upstream extern/CMakeLists.txt. MyGUI is headers only.",
+  "sources": {
+    "yaml": {
+      "url": "https://codeload.github.com/jbeder/yaml-cpp/zip/c2680200486572baf8221ba052ef50b58ecd816e",
+      "sha512": "9eb328e37ff547e7f681d64e3a8f268a8a5645cb1c258106d1d9f959eec498dfc7c466690c56f210ad7d5fb95b806a30c87ccbb019cccf5c3c6135cfc3c13fe1",
+      "revision": "c2680200486572baf8221ba052ef50b58ecd816e"
+    },
+    "mygui": {
+      "url": "https://codeload.github.com/MyGUI/mygui/zip/MyGUI3.4.3",
+      "sha512": "c804ef665e786076582367f171082cd2181fdbd214300ddcca4a4245c5a0f45e62e72778ee2d96ec46b393e22477dd729f9bb3006e6eecbf536674e34a057721",
+      "revision": "dae9ac4be5a09e672bec509b1a8552b107c40214"
+    },
+    "zlib": {
+      "url": "https://codeload.github.com/madler/zlib/zip/da607da739fa6047df13e66a2af6b8bec7c2a498",
+      "sha512": "cff8c2f11d43924e0f70213f12f3bd33fd5f3c45b325d2d1806310c0e61c1ca289d6e0674aed848315f14ec3422b39d2e45a8f2f657df6aab7b1c0015cf6b29e",
+      "revision": "da607da739fa6047df13e66a2af6b8bec7c2a498"
+    },
+    "png": {
+      "url": "https://codeload.github.com/pnggroup/libpng/zip/a543b51f2de2904f3436830394b1013782f7f9e6",
+      "sha512": "5c5616507d918ea8bd010909c768893e704801ac0224490404b465ae6c40089ca4f6d524e1028c3d4daa36e219251c949af7f442ea6a7fd4a2f0ddfb114c7778",
+      "revision": "a543b51f2de2904f3436830394b1013782f7f9e6"
+    },
+    "jpeg": {
+      "url": "https://codeload.github.com/libjpeg-turbo/libjpeg-turbo/zip/af9c1c268520a29adf98cad5138dafe612b3d318",
+      "sha512": "18f728c99836d9b14712ae8ad9045f270fcff45152b38a3ba146a5ff047847265651ebb7a6f2a921c15cc8052f38a19e911441225ac93dd59b9ef237c87e1374",
+      "revision": "af9c1c268520a29adf98cad5138dafe612b3d318"
+    },
+    "boost": {
+      "url": "https://archives.boost.io/release/1.88.0/source/boost_1_88_0.zip",
+      "revision": "199ef13d6034c85232431130142159af3adfce22",
+      "sha512": "e00c88bd082625f53166aba40356426bf3eaf3c8c0a2d819762128c670eeab6116ef3378d4bfd75c1dc2035496e26ade0ad8a99600951fc5b3d3cde2beb569b5",
+      "release_sha256": "8ee21476f1aca1978339f0f4a218b9b8a6746eec83070f32630f97b09c7e91b7",
+      "include_prefixes": [
+        "boost/",
+        "libs/program_options/src/",
+        "LICENSE_1_0.txt"
+      ]
+    }
+  }
+}
