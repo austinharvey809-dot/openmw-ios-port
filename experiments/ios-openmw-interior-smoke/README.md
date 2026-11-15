@@ -167,6 +167,37 @@ manual signing/install process. Back up private files locally before updating.
 
 ## Validation and handoff
 
+Build #3 dependency audit: UIKit supplies views/gestures/constraints;
+Foundation and CoreFoundation supply object/runtime/metadata services;
+CoreGraphics owns CGPointZero and geometry APIs; QuartzCore supplies CAMetalLayer;
+Metal supplies the graphics backend; GameController supplies controller input.
+GCD, CommonCrypto, POSIX and C++ runtime services use the system runtime;
+EGL/GLES use the existing verified ANGLE libraries. G1A::sha256 is supplied by
+the explicitly linked accepted g1b-geometry target. These dependencies were
+audited against G2's imports and API calls; no additional provider is introduced.
+`device/frameworks.json` is now the explicit application framework inventory.
+CoreGraphics is imported and linked directly instead of relying on UIKit's
+transitive dependencies. Packaging's existing selected-iPhoneOS-SDK dependency
+checks already accept legitimate CoreGraphics and remain unchanged.
+
+An early SDK-only Objective-C++ ARM64 link probe consumes that same inventory
+before Bullet or ANGLE acquisition. It references CGPointZero, UIKit/Foundation,
+CoreFoundation, CAMetalLayer, Metal, controller, GCD and CommonCrypto APIs, then
+inspects the executable and every system dependency against the selected SDK.
+It never executes a device binary on the host and is not a substitute for the
+full app compile/link, configured-provider audit, packaging or native tests.
+Its compiler/linker diagnostics are retained even on failure.
+
+Future safe acceleration: reuse an ANGLE dependency package only with an exact
+key covering pinned ANGLE/depot_tools revisions, build flags, ARM64/iPhoneOS
+platform, deployment target, Xcode/compiler and SDK identity. Require its
+inventory/checksums and rerun the existing dependency validator against the
+current selected SDK on every restore; reject stale/mismatched cache entries.
+Regenerate current-commit app/source provenance and retain all regression and
+packaging gates. OSG/generated headers need equivalent ABI/configuration keys.
+This build does not add cross-run caches or trust prior application binaries;
+the early SDK probe provides a contained improvement without a cache redesign.
+
 Build #1 preparation addresses the independent review observations:
 
 - The unchanged accepted G1D native harness is explicitly compiled beside G2
@@ -193,7 +224,7 @@ executed on Apple hardware. GPU setup/uploads and first-frame latency still need
 device profiling. Background preparation is not a claim of watchdog or memory
 acceptance on the iPhone, and does not bypass any hash or parser gate.
 
-**Passed locally:** 28 G2 Python tests; syntax parsing for all new Python tools;
+**Passed locally:** 31 G2 Python tests; syntax parsing for all new Python tools;
 deterministic/distinct authored fixtures; bounded framing, collision/effect and
 signed-light diagnostics; strict configured-build validator positive/negative
 cases; false-PASS rejection; source/fixture/provenance audits; workflow Bash and

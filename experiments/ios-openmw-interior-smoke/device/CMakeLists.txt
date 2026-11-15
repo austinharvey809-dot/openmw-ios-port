@@ -13,6 +13,15 @@ target_include_directories(IOSOpenMWInterior PRIVATE ${_includes} "${G2_GENERATE
 # Digest calls the accepted G1A::sha256 implementation compiled by this target.
 # Keep its declaration/include interface and link ownership explicit.
 target_link_libraries(IOSOpenMWInterior PRIVATE g2-cell g1b-geometry ${_links})
+# The SDK probe consumes this same explicit dependency inventory before ANGLE builds.
+file(READ "${G2_ROOT}/device/frameworks.json" _g2_frameworks)
+string(JSON _g2_framework_count LENGTH "${_g2_frameworks}")
+math(EXPR _g2_framework_last "${_g2_framework_count} - 1")
+foreach(_index RANGE 0 ${_g2_framework_last})
+  string(JSON _framework GET "${_g2_frameworks}" ${_index})
+  find_library(G2_${_framework} NAMES "${_framework}" REQUIRED)
+  target_link_libraries(IOSOpenMWInterior PRIVATE "${G2_${_framework}}")
+endforeach()
 target_include_directories(g2-cell BEFORE PUBLIC "${_g2_osg_include}" "${ANGLE_ROOT}/include")
 set_source_files_properties("${G2_GENERATED}/g2-build.json" PROPERTIES MACOSX_PACKAGE_LOCATION ".")
 target_sources(IOSOpenMWInterior PRIVATE "${G2_GENERATED}/g2-build.json")

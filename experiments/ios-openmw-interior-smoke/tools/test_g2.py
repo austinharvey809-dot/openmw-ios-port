@@ -14,6 +14,49 @@ def mesh(mode):
     raise ValueError('Missing authored NIF')
 
 class InteriorContracts(unittest.TestCase):
+    def test_explicit_framework_inventory_is_shared_by_app_and_early_probe(self):
+        import device_sdk_check
+        self.assertEqual(set(device_sdk_check.frameworks()),{'UIKit','Foundation','CoreFoundation','CoreGraphics','QuartzCore','Metal','GameController'})
+        cmake=(bridge.ROOT/'device/CMakeLists.txt').read_text()
+        self.assertIn('device/frameworks.json',cmake)
+        self.assertIn('find_library(G2_${_framework} NAMES "${_framework}" REQUIRED)',cmake)
+        self.assertIn('target_link_libraries(IOSOpenMWInterior PRIVATE "${G2_${_framework}}")',cmake)
+        self.assertIn('#import <CoreGraphics/CoreGraphics.h>',(bridge.ROOT/'device/src/main.mm').read_text())
+        workflow=(bridge.REPO/'.github/workflows/ios-openmw-interior-device.yml').read_text()
+        self.assertLess(workflow.index('tools/device_sdk_check.py'),workflow.index('Acquire and verify unchanged Bullet'))
+
+    def test_coregraphics_uses_real_dependency_graph_and_sdk_checks(self):
+        import device_sdk_check
+        import zipfile
+        pkg=fixtures.module('_g2_coregraphics_package_test',bridge.ROOT/'tools/package.py')
+        def binary(deps,kind=2,install=None,rpaths=()):
+            commands=[struct.pack('<6I',0x32,24,2,18<<16,27<<16,0)]
+            for command,value,base in [(0xc,d,24) for d in deps]+[(0x8000001c,r,12) for r in rpaths]+([(0xd,install,24)] if install else []):
+                value=value.encode()+b'\0';size=(base+len(value)+7)&~7
+                commands.append(struct.pack('<III',command,size,base)+bytes(base-12)+value+bytes(size-base-len(value)))
+            body=b''.join(commands)
+            return struct.pack('<8I',0xfeedfacf,0x0100000c,0,kind,len(commands),len(body),0,0)+body
+        cg='/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics'
+        roles={'egl':'Frameworks/libEGL.framework/libEGL','gles':'Frameworks/libGLESv2.framework/libGLESv2'}
+        deps=['@rpath/'+p.removeprefix('Frameworks/') for p in roles.values()]+[cg]
+        entries={'IOSOpenMWInterior':pkg.p.Entry(binary(deps,rpaths=('@executable_path/Frameworks',)),0o100755)}
+        for path in roles.values():entries[path]=pkg.p.Entry(binary([],6,'@rpath/'+path.removeprefix('Frameworks/')),0o100755)
+        with tempfile.TemporaryDirectory() as temp:
+            sdk=Path(temp)/'iPhoneOS.sdk';stub=sdk/(cg.lstrip('/')+'.tbd');stub.parent.mkdir(parents=True)
+            def write(target):stub.write_text("--- !tapi-tbd\ntbd-version: 4\ntargets: [ "+target+" ]\ninstall-name: '"+cg+"'\n...\n")
+            write('arm64-ios')
+            binaries,dependencies=pkg.p.graph(entries,'IOSOpenMWInterior',roles,sdk)
+            self.assertEqual(next(d for d in dependencies if d['dependency']==cg)['kind'],'iphoneos-sdk')
+            ipa=Path(temp)/'test.ipa';pkg.p.core.write_ipa(entries,ipa)
+            with zipfile.ZipFile(ipa) as z:
+                reopened={n[len(pkg.p.core.PREFIX):]:pkg.p.Entry(z.read(n),z.getinfo(n).external_attr>>16) for n in z.namelist() if not n.endswith('/')}
+            self.assertEqual(reopened,entries)
+            pkg.p.graph(reopened,'IOSOpenMWInterior',roles,sdk)
+            write('arm64-macos')
+            with self.assertRaises(ValueError):pkg.p.graph(entries,'IOSOpenMWInterior',roles,sdk)
+            stub.unlink()
+            with self.assertRaises(ValueError):pkg.p.graph(entries,'IOSOpenMWInterior',roles,sdk)
+
     def test_device_digest_explicitly_uses_the_accepted_hash_owner(self):
         main=(bridge.ROOT/'device/src/main.mm').read_text()
         cmake=(bridge.ROOT/'device/CMakeLists.txt').read_text()

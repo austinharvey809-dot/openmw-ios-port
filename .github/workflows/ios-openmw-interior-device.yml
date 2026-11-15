@@ -82,6 +82,13 @@ jobs:
           python3 -m unittest discover -s "$OPENMW_SOURCE/experiments/ios-openmw-nif-device-smoke/tools" -p test_g0c.py -v \
             2>&1 | tee "$EVIDENCE/g0c-regressions.log"
 
+      - name: Early iPhoneOS framework compilation and link preflight
+        id: sdk_probe
+        run: |
+          set -euo pipefail
+          python3 "$OPENMW_SOURCE/experiments/ios-openmw-interior-smoke/tools/device_sdk_check.py" \
+            --output "$EVIDENCE/sdk-probe" > "$EVIDENCE/sdk-probe.json" 2> "$EVIDENCE/sdk-probe-errors.log"
+
       - name: Acquire and verify unchanged Bullet 3.25 source
         id: bullet
         run: |
@@ -153,6 +160,7 @@ jobs:
           BUILD_GATE: ${{ steps.build.outcome }}
           RUNTIME_GATE: ${{ steps.runtime.outcome }}
           G2_HOST_GATE: ${{ steps.g2_host.outcome }}
+          SDK_PROBE_GATE: ${{ steps.sdk_probe.outcome }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -178,7 +186,7 @@ jobs:
                           target=evidence/'g2-build'/extra.name/path.relative_to(extra)
                           target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
           status = {'gates': {name: os.environ.get(name, 'not-run') for name in
-                    ('SOURCE_GATE', 'BULLET_GATE', 'CONFIGURE_GATE', 'BUILD_GATE', 'RUNTIME_GATE', 'G2_HOST_GATE')},
+                    ('SOURCE_GATE', 'BULLET_GATE', 'CONFIGURE_GATE', 'BUILD_GATE', 'RUNTIME_GATE', 'G2_HOST_GATE', 'SDK_PROBE_GATE')},
                     'gpu_rendering': 'not-performed', 'iphoneos_build': 'not-performed',
                     'ipa_packaging': 'not-performed', 'physical_device': 'not-performed'}
           (evidence / 'job-status.json').write_text(json.dumps(status, indent=2) + '\n')
