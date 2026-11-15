@@ -1,0 +1,27 @@
+{
+  "accepted_g1d_commit": "a70ab5a7c8974245b205826ab748d86a79a53b1e",
+  "source_sha256_lf": {
+    "experiments/ios-openmw-nif-render-smoke/real-model/src/StaticModel.cpp": "77ecc07aaabd44b474498216c1adb874dd2c9b7644cc08dfacd0528838975e58",
+    "experiments/ios-openmw-nif-render-smoke/real-model/src/StaticProperties.hpp": "d4dabb4e6f921d83f0c06305c52497d24aaf35036d021ddcf9acdf2c7d4671e0",
+    "experiments/ios-openmw-nif-render-smoke/real-model/device/src/OSGScene.hpp": "4dfba5e60a93c26b45ffdb8e6bf2554d43caf332d73cbe4308ae4c1f93290a53",
+    "experiments/ios-openmw-nif-render-smoke/real-model/device/src/main.mm": "ded1e848f0bd35b6cf47ce16403329816847e1e59d9800c43661775aac0b2777",
+    "experiments/ios-openmw-nif-render-smoke/real-model/device/Info.plist.in": "546399d0f0e7799f655680a64e1106c8e0e949f3d0628820d4e07ea57928cb92",
+    "experiments/ios-openmw-nif-render-smoke/real-model/device/CMakeLists.txt": "ab1c8cbab46c3e901ff96657db770b67b2d4530c7251ff9ef19bab3f05772259",
+    "experiments/ios-openmw-nif-render-smoke/real-model/tools/package.py": "83534977eb5187eb3b6f241c0563af20bee20743a131ac82582aa38883ac9662",
+    ".github/workflows/ios-openmw-real-model-device.yml": "dce33d0922222b3f3ef2694701d3dbf24e0eff4160979e8dc11ea1443de85443",
+    "components/esm3/loadcell.cpp": "86b712bbe65d9568741eb385b7e62051d411dc02b01860710e1e908bd17a29de",
+    "components/esm3/cellref.cpp": "2a424ebc6e195c47550d20c20d10d5897b25d913822ac985677c3eba12597bcd",
+    "components/esm3/loadacti.cpp": "8e3ab6907a86179387619e20e73cb916654ce8c73ba9c12cb3955d27d7408fef",
+    "components/esm3/loadcont.cpp": "c6ff0993d04dd2978641f3d43633651d13a4519a8426c6da15f03bb5a931639d",
+    "components/esm3/loaddoor.cpp": "926286792dcad07535a7e6f223ebd4fe10925405ef3a8cf53475112024ce63da",
+    "components/esm3/loadmisc.cpp": "93e9569bbe77a9ed82c83b4ebcb4d8154f650291c6a8ad1f47c876f0411c063b",
+    "components/esm3/loadligh.cpp": "1468f41a3da414dac1500335321743529b3fe4f9d5ff64050a402d1886d88dbc",
+    "components/esm3/loadcell.hpp": "86538e15e4ddd22aca3d8a078f2f942dccf0a9f0505a86e3c81cc1f02b365ec4",
+    "components/esm3/cellref.hpp": "03766fbb77721525bc06f43d616ffc37b64aba5316ac47c375d10b7907b549f3",
+    "components/esm3/loadacti.hpp": "3017f67f2479351e8d0a07a21ab90c1130750272cb0545e19b40f5be275a37f4",
+    "components/esm3/loadcont.hpp": "af8ea286147c14a4135e76ae7ff732a60434de36422308ac62754ee613bc5616",
+    "components/esm3/loaddoor.hpp": "3bab24aa65db0a168485deb5a3e50f9725dcfecb11007f4de36131bed880f5d0",
+    "components/esm3/loadmisc.hpp": "fb03213e7c679856abc82b36fe5c77ee6cb2b1c570406e7ff76b27c827b4202b",
+    "components/esm3/loadligh.hpp": "d5cbb8b8f81642af1fd9a28dca5bce02f0c5f7e8c39609dcb0ce7ca62a6a0f8f"
+  }
+}
