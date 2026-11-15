@@ -17,6 +17,15 @@ target_include_directories(IOSOpenMWWorld PRIVATE ${_includes} "${G4_GENERATED}"
 target_include_directories(IOSOpenMWWorld BEFORE PRIVATE "${G4_OSG_GENERATED_INCLUDE}" "${ANGLE_ROOT}/include")
 target_include_directories(g4-upstream BEFORE PUBLIC "${G4_OSG_GENERATED_INCLUDE}" "${ANGLE_ROOT}/include")
 target_link_libraries(IOSOpenMWWorld PRIVATE g4-upstream ${_links})
+add_executable(openmw-g4-osg-registration-check "${G4_ROOT}/tests/osg_registration.cpp")
+target_link_libraries(openmw-g4-osg-registration-check PRIVATE ${G4_REGISTRATION_LIBRARIES} ${_links})
+target_compile_features(openmw-g4-osg-registration-check PRIVATE cxx_std_20)
+target_link_options(openmw-g4-osg-registration-check PRIVATE "-Wl,-no_adhoc_codesign")
+set_target_properties(openmw-g4-osg-registration-check PROPERTIES
+  BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "@executable_path/Frameworks"
+  INSTALL_RPATH_USE_LINK_PATH FALSE XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED NO)
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/g4-registration-$<CONFIG>.txt"
+  CONTENT "$<TARGET_FILE:openmw-g4-osg-registration-check>\n")
 target_compile_options(IOSOpenMWWorld PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
 target_link_options(IOSOpenMWWorld PRIVATE "-Wl,-no_adhoc_codesign")
 set_target_properties(IOSOpenMWWorld PROPERTIES

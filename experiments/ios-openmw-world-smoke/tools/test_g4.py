@@ -5,6 +5,52 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import fixtures,native_preflight,package,paths,prepare_dependencies,prepare_shaders,private_profile,provenance,run_cases
 import dependency_preflight
+import osg_compat
+
+
+class OSGCompatibilityTests(unittest.TestCase):
+    def test_exact_khronos_identifier_values(self):
+        osg_compat.literal('#define GL_BUFFER_KHR 0x82E0\n','GL_BUFFER_KHR')
+        for text in ('#define GL_BUFFER_KHR 0x1234\n','',
+                '#define GL_BUFFER_KHR 0x82E0\n#define GL_BUFFER_KHR 0x82E0\n'):
+            with self.assertRaises(ValueError):osg_compat.literal(text,'GL_BUFFER_KHR')
+    def test_guarded_source_inventory_and_hash(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);source=root/'osg';name=osg_compat.SERIALIZER
+            target=source/name;target.parent.mkdir(parents=True)
+            target.write_text('ADD_GLENUM_SERIALIZER( Target,GLenum, GL_BUFFER);\n')
+            (root/'data').mkdir();lock={'osg_revision':'authored','source_sha256_lf':{name:hashlib.sha256(target.read_bytes().replace(b'\r\n',b'\n')).hexdigest()}}
+            (root/'data/gles-source-lock.json').write_text(json.dumps(lock))
+            with patch.object(osg_compat,'ROOT',root):
+                self.assertEqual(osg_compat.verify(source)['verified_sources'],1)
+                target.write_text('changed default\n')
+                with self.assertRaisesRegex(ValueError,'source changed'):osg_compat.verify(source)
+                target.with_name('unexpected.cpp').write_text('extra')
+                with self.assertRaisesRegex(ValueError,'inventory'):osg_compat.verify(source)
+    def test_complete_native_inventory_and_alias_scope(self):
+        lock=json.loads((paths.ROOT/'data/gles-source-lock.json').read_text())['source_sha256_lf']
+        with tempfile.TemporaryDirectory() as temp:
+            build=Path(temp);commands=[]
+            for name in lock:
+                target='g4-serializers-osg' if '/serializers/' in name else 'g4-plugin-osg' if '/osgPlugins/' in name else Path(name).parts[1]
+                args=['clang++','-DGL_BUFFER=GL_BUFFER_KHR'] if name==osg_compat.SERIALIZER else ['clang++']
+                commands.append({'file':'/pinned/'+name,'arguments':args,'output':'CMakeFiles/'+target+'.dir/source.o'})
+            def write(entries):(build/'compile_commands.json').write_text(json.dumps(entries))
+            write(commands);self.assertEqual(len(osg_compat.configured(build)),221)
+            for entries in (commands[:-1],commands+[commands[0]]):
+                write(entries)
+                with self.assertRaisesRegex(ValueError,'inventory'):osg_compat.configured(build)
+            commands[0]['arguments'].append('-DGL_BUFFER=GL_BUFFER_KHR');write(commands)
+            with self.assertRaisesRegex(ValueError,'leaked'):osg_compat.configured(build)
+    def test_preflight_compiles_actual_targets_and_cache_is_revalidated(self):
+        code=(paths.ROOT/'tools/native_preflight.py').read_text()
+        self.assertIn('*osg_compat.TARGETS',code);self.assertIn('osg_compat.compiled',code)
+        workflow=provenance.WORKFLOW.read_text()
+        self.assertIn('--target openmw-world-check openmw-g4-osg-registration-check',workflow)
+        self.assertIn('HEAD:experiments/ios-angle-smoke',workflow)
+        self.assertIn('--show-sdk-build-version',workflow)
+        self.assertLess(workflow.index('--resolve "$EVIDENCE/cached-angle.cmake"'),workflow.index('--sdk "$(xcrun --sdk iphoneos --show-sdk-path)"',workflow.index('id: angle\n')))
+        self.assertNotIn('restore-keys:',workflow)
 
 
 class DependencyTests(unittest.TestCase):

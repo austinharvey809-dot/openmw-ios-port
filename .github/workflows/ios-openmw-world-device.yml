@@ -169,7 +169,7 @@ jobs:
           python3 "$REAL/tools/provenance.py" --configured "$RUNNER_TEMP/g4-host-build" \
             > "$EVIDENCE/g3-host-bullet-audit.json" 2> "$EVIDENCE/g3-host-bullet-audit-errors.log"
           # Accepted harnesses and G4 share the same pinned OSG/Bullet provider.
-          cmake --build "$RUNNER_TEMP/g4-host-build" --target openmw-world-check openmw-exterior-check openmw-interior-check openmw-real-model-check --parallel 4 2>&1 | tee "$EVIDENCE/g4-host-build.log"
+          cmake --build "$RUNNER_TEMP/g4-host-build" --target openmw-world-check openmw-g4-osg-registration-check openmw-exterior-check openmw-interior-check openmw-real-model-check --parallel 4 2>&1 | tee "$EVIDENCE/g4-host-build.log"
           ctest --test-dir "$RUNNER_TEMP/g4-host-build/provider/interior/provider" -R '^g1d-' --no-tests=error -V 2>&1 | tee "$EVIDENCE/g1d-native-tests.log"
           ctest --test-dir "$RUNNER_TEMP/g4-host-build/provider/interior" -R '^g2-' --no-tests=error -V 2>&1 | tee "$EVIDENCE/g2-native-tests.log"
           ctest --test-dir "$RUNNER_TEMP/g4-host-build/provider" -R '^g3-' --no-tests=error -V 2>&1 | tee "$EVIDENCE/g3-native-tests.log"
@@ -248,14 +248,59 @@ jobs:
           persist-credentials: false
           submodules: false
           lfs: false
-      - name: Build exact locked ANGLE Metal iPhoneOS package
+      - name: Bind ANGLE cache to exact source recipe and current Apple toolchain
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, platform, subprocess
+          from pathlib import Path
+          def read(*args):
+              return subprocess.check_output(args, text=True).strip()
+          context = {
+              'schema': 1,
+              'source_tree': read('git', '-C', os.environ['OPENMW_SOURCE'], 'rev-parse', 'HEAD:experiments/ios-angle-smoke'),
+              'xcode': read('xcodebuild', '-version'),
+              'sdk': read('xcrun', '--sdk', 'iphoneos', '--show-sdk-version'),
+              'sdk_build': read('xcrun', '--sdk', 'iphoneos', '--show-sdk-build-version'),
+              'clang': read('xcrun', '--sdk', 'iphoneos', 'clang', '--version'),
+              'host': platform.platform(), 'architecture': platform.machine(),
+              'runner_image': os.environ.get('ImageVersion', 'unknown'),
+          }
+          data = json.dumps(context, sort_keys=True).encode()
+          (Path(os.environ['EVIDENCE'])/'angle-cache-context.json').write_bytes(data)
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('ANGLE_CACHE_KEY=g4-angle-device-v1-' + hashlib.sha256(data).hexdigest() + '\n')
+          PY
+      - name: Restore exact ANGLE package (always revalidate inventory and SDK)
+        id: angle_cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ runner.temp }}/g1c-angle-device
+          key: ${{ env.ANGLE_CACHE_KEY }}
+      - name: Build or independently revalidate exact locked ANGLE Metal package
         id: angle
+        env:
+          ANGLE_CACHE_HIT: ${{ steps.angle_cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/ios-port
-          python3 -u "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/build_angle.py" \
-            --workspace "$RUNNER_TEMP/g1c-angle-work" --output "$ANGLE_ROOT" --allow-downloads --jobs 3 \
-            2>&1 | tee "$EVIDENCE/angle-build.log"
+          if test "$ANGLE_CACHE_HIT" = true; then
+            # Check the saved inventory BEFORE validate_dependency regenerates it.
+            python3 "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/validate_dependency.py" \
+              --root "$ANGLE_ROOT" --resolve "$EVIDENCE/cached-angle.cmake" 2>&1 | tee "$EVIDENCE/angle-cache-inventory.log"
+            python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          context=json.loads((Path(os.environ['EVIDENCE'])/'angle-cache-context.json').read_text())
+          built=json.loads((Path(os.environ['ANGLE_ROOT'])/'angle-build.json').read_text())['toolchain']
+          if any(built[name].strip()!=context[name] for name in ('xcode','sdk','host')):
+              raise ValueError('Cached ANGLE toolchain provenance differs')
+          PY
+          else
+            python3 -u "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/build_angle.py" \
+              --workspace "$RUNNER_TEMP/g1c-angle-work" --output "$ANGLE_ROOT" --allow-downloads --jobs 3 \
+              2>&1 | tee "$EVIDENCE/angle-build.log"
+          fi
           python3 "$OPENMW_SOURCE/experiments/ios-angle-smoke/tools/validate_dependency.py" \
             --root "$ANGLE_ROOT" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" \
             2>&1 | tee "$EVIDENCE/angle-validation.log"
@@ -396,7 +441,7 @@ jobs:
             -DOPENMW_ESM_OSG_SOURCE="$OPENMW_ESM_OSG_SOURCE" -DG0_BULLET_SOURCE="$BULLET_ROOT/source" \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tee "$EVIDENCE/g4-configure.log"
           python3 "$REAL/tools/provenance.py" --configured "$REAL_BUILD" --sdk "$(xcrun --sdk iphoneos --show-sdk-path)" > "$EVIDENCE/g4-configured-audit.json" 2> "$EVIDENCE/g4-configured-audit-errors.log"
-      - name: Configure build and inspect genuine dependency archives; compile new Apple consumers
+      - name: Verify native dependency archives, compile new OSG targets and link registrations
         id: g4_preflight
         run: |
           set -euo pipefail

@@ -1,5 +1,48 @@
 # G4 genuine world integration foundation
 
+## Build #3 GLES serializer and native coverage
+
+Build #2 passed JPEG configuration, real dependency archive validation and the
+consumer preflight, then failed compiling BufferIndexBinding.cpp: GLES3/gl3.h
+does not expose GL_BUFFER, while the selected ANGLE gl2ext.h exposes the
+identical Khronos GL_BUFFER_KHR value 0x82E0. The serializer macro consumes a
+numeric default, not the token spelling. Only this translation unit receives
+GL_BUFFER=GL_BUFFER_KHR; no API, upstream source or serialization value changes.
+The pinned source/semantic anchor and both ANGLE token declarations are checked
+before configuring the alias. No desktop GL or GLES3.2 header replaces the
+selected GLES3 headers. The gl32.h declaration is read only to verify equality.
+
+The complete new OSG source inventory is locked: 137 serializers, eight image
+plugin units and 76 units in osgAnimation/osgParticle/osgShadow (221 total).
+Every unit compiled locally against genuine CMake-generated GLES3 headers and
+the exact pinned ANGLE headers. The original failure reproduced without the
+alias; no second compile incompatibility appeared. This supplemental Windows
+object audit does not establish Apple linking or runtime support for every
+serialized object/capability.
+
+Native preflight now builds the actual new targets, validates every resulting
+ARM64/iPhoneOS object and performs a real static-registration link probe. Those
+same objects are reused in the final G4 application build, avoiding a duplicate
+syntax-only pass over 221 files. The probe forces all genuine reader/serializer
+registration symbols. A host runtime check verifies reader discovery and the
+BufferIndexBinding.Target serializer. The modern osg2 reader, already compiled
+in the plugin archive, now has an explicit static reference in the application
+so the linker cannot discard it. Genuine image implementations are retained.
+
+ANGLE package reuse uses an exact cache key containing the complete ANGLE source
+recipe tree, Xcode, SDK version/build, compiler, host/architecture and runner
+image. There are no fallback keys. Cache hits must pass the saved exact inventory
+and digests before SDK validation can refresh diagnostics; recorded toolchain,
+pins, GN configuration, symbols, device platform and dependencies are rechecked.
+The first cache miss still builds ANGLE normally. Existing source ZIP caches
+remain hash-verified. The separate accepted baseline build tree is retained;
+merging its path-sensitive provenance contracts is deferred rather than weakened.
+
+Local results: 39 Python tests, all 221 GLES3 source objects, genuine host
+registration linking/runtime, retained 41 CPU regressions and preservation
+checks. All Apple linking, final app/IPA and physical G4 gates remain separate
+and unverified until their tests execute. No performance mods or G5 work.
+
 ## Build #2 JPEG cross-compilation correction
 
 Build #1 reached G4 application compilation but failed while configuring the

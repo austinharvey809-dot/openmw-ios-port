@@ -12,8 +12,15 @@
 #include <osg/StateSet>
 #include <osg/Texture>
 #include <osg/Stats>
+#include <osgDB/Registry>
 #include <cmath>
 #include <stdexcept>
+
+#ifdef OSG_LIBRARY_STATIC
+// ImageManager already forces the six legacy image readers. The separately
+// compiled osg2 translation unit also needs a reference in a static executable.
+USE_OSGPLUGIN(osg2)
+#endif
 
 namespace G4 {
 namespace {
