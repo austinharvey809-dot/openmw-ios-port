@@ -18,6 +18,11 @@
 #include <cstdlib>
 #include <functional>
 
+namespace G4 {
+// Implemented by the device frontend using ANGLE's EGL context-handle query.
+bool deviceContextCurrent();
+}
+
 class OSGScene {
     G4::NotificationScope notifications; // Last destroyed, after workers/OSG.
     osg::ref_ptr<osgViewer::GraphicsWindowEmbedded> window;
@@ -59,6 +64,7 @@ public:
         const auto checkpoint=[this](const std::string& stage){notifications.get()->write("G4 startup "+stage);};
         checkpoint("osg.notifications.complete");
         std::lock_guard registry(G4::CapabilityRegistryMutex);
+        G4::requireCurrentGLContext(G4::deviceContextCurrent);
         checkpoint("osg.entry-points.begin");
         for(const char* name:{"glCreateShader","glBindVertexArray","glDrawElements"})
             if(!osg::getGLExtensionFuncPtr(name))throw std::runtime_error(std::string("ANGLE resolver missing ")+name);
@@ -81,7 +87,7 @@ public:
 #else
         setenv("OPENMW_DECOMPRESS_TEXTURES","1",1);
 #endif
-        G4::initializeGLCapabilities(window,checkpoint);
+        G4::initializeGLCapabilities(window,G4::deviceContextCurrent,checkpoint);
         checkpoint("osg.viewer.begin");
         viewer=new osgViewer::Viewer;viewer->setThreadingModel(osgViewer::Viewer::SingleThreaded);
         viewer->setReleaseContextAtEndOfFrameHint(false);viewer->setCameraManipulator(nullptr);

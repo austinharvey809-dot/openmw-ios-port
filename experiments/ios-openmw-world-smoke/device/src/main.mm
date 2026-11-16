@@ -27,6 +27,12 @@
 #include <iomanip>
 #include <sstream>
 
+namespace G4 {
+bool deviceContextCurrent(){
+    return eglGetCurrentContext()!=EGL_NO_CONTEXT&&eglGetCurrentDisplay()!=EGL_NO_DISPLAY;
+}
+}
+
 static NSMutableDictionary *Evidence;
 static NSMutableDictionary *StartupEvidence;
 static std::mutex DiagnosticFileMutex;

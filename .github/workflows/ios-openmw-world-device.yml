@@ -153,8 +153,8 @@ jobs:
           ctest --test-dir "$BUILD_DIR" -R '^g1c-' --no-tests=error \
             --output-on-failure -V 2>&1 | tee "$EVIDENCE/native-tests.log"
 
-      - name: G4 genuine host regressions with all accepted G1D G2 G3 suites
-        id: g4_host
+      - name: Configure G4 genuine shared host provider
+        id: g4_host_configure
         run: |
           set -euo pipefail
           REAL="$OPENMW_SOURCE/$WORLD"
@@ -168,6 +168,17 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_EXPORT_COMPILE_COMMANDS=ON 2>&1 | tee "$EVIDENCE/g2-host-configure.log"
           python3 "$REAL/tools/provenance.py" --configured "$RUNNER_TEMP/g4-host-build" \
             > "$EVIDENCE/g3-host-bullet-audit.json" 2> "$EVIDENCE/g3-host-bullet-audit-errors.log"
+      - name: Early G4 headless startup lifecycle gate
+        id: g4_startup
+        run: |
+          set -euo pipefail
+          # Reuse the same OSG targets; do not wait for the G4 world/image closure.
+          cmake --build "$RUNNER_TEMP/g4-host-build" --target openmw-g4-startup-check --parallel 4 2>&1 | tee "$EVIDENCE/g4-startup-build.log"
+          ctest --test-dir "$RUNNER_TEMP/g4-host-build" -R '^g4-startup-capabilities$' --no-tests=error -V 2>&1 | tee "$EVIDENCE/g4-startup-tests.log"
+      - name: G4 genuine host regressions with all accepted G1D G2 G3 suites
+        id: g4_host
+        run: |
+          set -euo pipefail
           # Accepted harnesses and G4 share the same pinned OSG/Bullet provider.
           cmake --build "$RUNNER_TEMP/g4-host-build" --target openmw-world-check openmw-g4-osg-registration-check openmw-exterior-check openmw-interior-check openmw-real-model-check --parallel 4 2>&1 | tee "$EVIDENCE/g4-host-build.log"
           ctest --test-dir "$RUNNER_TEMP/g4-host-build/provider/interior/provider" -R '^g1d-' --no-tests=error -V 2>&1 | tee "$EVIDENCE/g1d-native-tests.log"
@@ -184,6 +195,8 @@ jobs:
           BUILD_GATE: ${{ steps.build.outcome }}
           RUNTIME_GATE: ${{ steps.runtime.outcome }}
           G4_HOST_GATE: ${{ steps.g4_host.outcome }}
+          G4_HOST_CONFIGURE_GATE: ${{ steps.g4_host_configure.outcome }}
+          G4_STARTUP_GATE: ${{ steps.g4_startup.outcome }}
           SDK_PROBE_GATE: ${{ steps.sdk_probe.outcome }}
         run: |
           set -euo pipefail
@@ -206,11 +219,11 @@ jobs:
           for extra in (Path(os.environ['RUNNER_TEMP'])/'g4-device-build',Path(os.environ['RUNNER_TEMP'])/'g4-host-build'):
               if extra.is_dir():
                   for path in extra.rglob('*'):
-                      if path.is_file() and path.name in {'CMakeCache.txt','compile_commands.json','CMakeConfigureLog.yaml','CMakeError.log','CMakeOutput.log','MeshBridge.cpp','WorldMesh.cpp','MaterialShader.hpp','osg-include.txt','LastTest.log','link.txt','g3-product-Release.txt','g4-product-Release.txt','g4-build.json','g4-environment.json','g4-dependencies.json','shader-provenance.json'}:
+                      if path.is_file() and path.name in {'CMakeCache.txt','compile_commands.json','CMakeConfigureLog.yaml','CMakeError.log','CMakeOutput.log','MeshBridge.cpp','WorldMesh.cpp','MaterialShader.hpp','osg-include.txt','LastTest.log','link.txt','g3-product-Release.txt','g4-product-Release.txt','g4-build.json','g4-environment.json','g4-dependencies.json','shader-provenance.json','g4-startup-case.json','g4-world-cases.json','openmw-world-check','openmw-g4-startup-check'}:
                           target=evidence/'g4-build'/extra.name/path.relative_to(extra)
                           target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
           status = {'gates': {name: os.environ.get(name, 'not-run') for name in
-                    ('SOURCE_GATE', 'BULLET_GATE', 'CONFIGURE_GATE', 'BUILD_GATE', 'RUNTIME_GATE', 'G4_HOST_GATE', 'SDK_PROBE_GATE')},
+                    ('SOURCE_GATE', 'BULLET_GATE', 'CONFIGURE_GATE', 'BUILD_GATE', 'RUNTIME_GATE', 'G4_HOST_CONFIGURE_GATE', 'G4_STARTUP_GATE', 'G4_HOST_GATE', 'SDK_PROBE_GATE')},
                     'gpu_rendering': 'not-performed', 'iphoneos_build': 'not-performed',
                     'ipa_packaging': 'not-performed', 'physical_device': 'not-performed'}
           (evidence / 'job-status.json').write_text(json.dumps(status, indent=2) + '\n')

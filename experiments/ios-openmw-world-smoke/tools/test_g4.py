@@ -1,5 +1,5 @@
 """Portable boundary regressions; no Apple SDK or physical acceptance claims."""
-import hashlib,io,json,os,plistlib,shutil,stat,struct,subprocess,sys,tempfile,unittest,zipfile
+import base64,hashlib,io,json,os,plistlib,shutil,stat,struct,subprocess,sys,tempfile,unittest,zipfile
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -215,6 +215,79 @@ class ArchiveTests(unittest.TestCase):
             list(prepare_dependencies.members(archive))
 
 
+class RunnerEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def completed(code=0,stdout=b'',stderr=b''):
+        return subprocess.CompletedProcess(['authored-child'],code,stdout,stderr)
+    def test_partial_results_and_silent_signal_are_retained_before_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output=Path(temp)/'results.json';calls=[]
+            def child(*args,**kwargs):
+                pending=json.loads(output.read_text());self.assertEqual(pending[-1]['status'],'RUNNING')
+                calls.append(args[0])
+                return self.completed(0,b'{"status":"PASS","cells":9,"programs":2}') if len(calls)==1 else self.completed(-11)
+            with patch.object(fixtures,'POSITIVE',('good','startup-capabilities')),patch.object(fixtures,'NEGATIVE',{}),patch.object(run_cases.subprocess,'run',side_effect=child),patch.object(run_cases.sys,'platform','darwin'):
+                with self.assertRaisesRegex(ValueError,'exit=-11 signal=11'):
+                    run_cases.run(Path('authored-child'),Path('authored-shaders'),output)
+            rows=json.loads(output.read_text());self.assertEqual(len(rows),2)
+            self.assertEqual(rows[0]['status'],'PASS');self.assertEqual(rows[1]['status'],'FAIL')
+            self.assertEqual(rows[1]['signal_name'],'SIGSEGV');self.assertEqual(rows[1]['stdout'],'')
+            self.assertEqual(rows[1]['stderr'],'');self.assertTrue(rows[1]['inputs_unchanged'])
+            self.assertFalse(list(output.parent.glob('*.tmp')))
+    def test_windows_status_and_non_utf8_streams_are_lossless(self):
+        with patch.object(run_cases.subprocess,'run',return_value=self.completed(0xc0000005,b'partial\xff',b'warning\x80')):
+            row=run_cases.capture(['authored-child'],1)
+        self.assertEqual(row['exit_hex'],'0xc0000005');self.assertIsNone(row['signal'])
+        self.assertEqual(base64.b64decode(row['stdout_base64']),b'partial\xff')
+        self.assertEqual(base64.b64decode(row['stderr_base64']),b'warning\x80')
+    def test_signed_windows_status_is_not_mislabeled_as_a_posix_signal(self):
+        with patch.object(run_cases.subprocess,'run',return_value=self.completed(-1073741819)),patch.object(run_cases.sys,'platform','win32'):
+            row=run_cases.capture(['authored-child'],1)
+        self.assertEqual(row['exit'],-1073741819)
+        self.assertEqual(row['exit_hex'],'0xc0000005');self.assertIsNone(row['signal'])
+    def test_timeout_retains_partial_streams_without_inventing_an_exit_code(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output=Path(temp)/'startup.json'
+            error=subprocess.TimeoutExpired(['authored-child'],30,output=b'partial',stderr=b'waiting')
+            with patch.object(run_cases.subprocess,'run',side_effect=error),self.assertRaisesRegex(ValueError,'timed out'):
+                run_cases.run_startup(Path('authored-child'),output)
+            row=json.loads(output.read_text())[0];self.assertTrue(row['timeout'])
+            self.assertIsNone(row['exit']);self.assertEqual(row['stdout'],'partial');self.assertEqual(row['stderr'],'waiting')
+            self.assertEqual(row['status'],'FAIL')
+    def test_spawn_error_and_malformed_success_are_saved(self):
+        outcomes=[FileNotFoundError('authored missing binary'),self.completed(0,b'not JSON'),self.completed(0,b'[]'),
+            self.completed(0,b'{"status":"PASS","checks":0,"scope":"genuine pinned OSG headless startup guards"}')]
+        for outcome in outcomes:
+            with self.subTest(outcome=outcome),tempfile.TemporaryDirectory() as temp:
+                output=Path(temp)/'startup.json'
+                options={'side_effect':outcome} if isinstance(outcome,Exception) else {'return_value':outcome}
+                with patch.object(run_cases.subprocess,'run',**options),self.assertRaises(ValueError):
+                    run_cases.run_startup(Path('authored-child'),output)
+                self.assertEqual(json.loads(output.read_text())[0]['status'],'FAIL')
+    def test_mutated_inputs_fail_with_their_before_and_after_hashes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output=Path(temp)/'results.json'
+            def mutate(command,**kwargs):
+                (Path(command[1])/'Morrowind.esm').write_bytes(b'authored mutation')
+                return self.completed(0,b'{"status":"PASS","cells":9,"programs":2}')
+            with patch.object(fixtures,'POSITIVE',('good',)),patch.object(fixtures,'NEGATIVE',{}),patch.object(run_cases.subprocess,'run',side_effect=mutate):
+                with self.assertRaisesRegex(ValueError,'modified authored inputs'):
+                    run_cases.run(Path('authored-child'),Path('authored-shaders'),output)
+            row=json.loads(output.read_text())[0];self.assertFalse(row['inputs_unchanged'])
+            self.assertNotEqual(row['inputs_before_sha256'],row['inputs_after_sha256'])
+    def test_signal_cannot_pass_a_negative_even_with_the_expected_message(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output=Path(temp)/'results.json'
+            with patch.object(fixtures,'POSITIVE',()),patch.object(fixtures,'NEGATIVE',{'locked-door':'locked/trapped door'}),patch.object(run_cases.subprocess,'run',return_value=self.completed(-11,b'',b'locked/trapped door')):
+                with self.assertRaisesRegex(ValueError,'Wrong native rejection'):
+                    run_cases.run(Path('authored-child'),Path('authored-shaders'),output)
+            self.assertEqual(json.loads(output.read_text())[0]['status'],'FAIL')
+    def test_real_silent_child_exit_is_retained(self):
+        row=run_cases.capture([sys.executable,'-c','import os; os._exit(23)'],10)
+        self.assertEqual(row['exit'],23);self.assertEqual(row['stdout'],'');self.assertEqual(row['stderr'],'')
+        self.assertFalse(row['timeout']);self.assertIsNone(row['signal'])
+
+
 class CompilerTests(unittest.TestCase):
     def test_strict_standard_and_no_substring_escape(self):
         for spelling in ('-std=c++20','-std=c++2a'):provenance.standard([spelling])
@@ -312,9 +385,30 @@ class Contracts(unittest.TestCase):
         registration=helper.split('inline void registerGLCapabilities',1)[1].split('inline void initializeGLCapabilities',1)[0]
         self.assertLess(registration.index('get<osg::GLExtensions>()'),registration.index('operation(context)'))
         device=(paths.ROOT/'device/src/OSGScene.hpp').read_text()
-        self.assertIn('G4::initializeGLCapabilities(window,checkpoint)',device)
+        self.assertIn('G4::initializeGLCapabilities(window,G4::deviceContextCurrent,checkpoint)',device)
         self.assertNotIn('extensions(window)',device)
         self.assertIn('startup-capabilities',fixtures.POSITIVE)
+    def test_context_handle_is_checked_before_any_gl_dispatch(self):
+        helper=(paths.ROOT/'src/GLCapabilities.hpp').read_text().split('inline void initializeGLCapabilities',1)[1]
+        self.assertLess(helper.index('requireCurrentGLContext(current)'),helper.index('glGetString(GL_VERSION)'))
+        device=(paths.ROOT/'device/src/OSGScene.hpp').read_text()
+        self.assertLess(device.index('G4::requireCurrentGLContext'),device.index('new osgViewer::GraphicsWindowEmbedded'))
+        main=(paths.ROOT/'device/src/main.mm').read_text()
+        self.assertIn('eglGetCurrentContext()!=EGL_NO_CONTEXT',main)
+        self.assertIn('eglGetCurrentDisplay()!=EGL_NO_DISPLAY',main)
+        test=(paths.ROOT/'tests/StartupChecks.hpp').read_text()
+        self.assertIn('CGLGetCurrentContext()',test);self.assertIn('wglGetCurrentContext()',test)
+        self.assertIn('window->close(false)',test);self.assertNotIn('glGetString(',test)
+    def test_early_native_gate_and_partial_evidence_precede_full_world_build(self):
+        workflow=provenance.WORKFLOW.read_text()
+        self.assertLess(workflow.index('--target openmw-g4-startup-check'),workflow.index('--target openmw-world-check'))
+        self.assertIn("'^g4-startup-capabilities$'",workflow)
+        for name in ('g4-startup-case.json','g4-world-cases.json','G4_STARTUP_GATE'):
+            self.assertIn(name,workflow)
+        cmake=(paths.ROOT/'CMakeLists.txt').read_text()
+        linkage=cmake.split('target_link_libraries(openmw-g4-startup-check PRIVATE ',1)[1].split(')',1)[0]
+        self.assertNotIn('g4-upstream',linkage);self.assertNotIn('Bullet',linkage)
+        self.assertIn('--output "${CMAKE_CURRENT_BINARY_DIR}/g4-world-cases.json"',cmake)
     def test_startup_evidence_precedes_renderer_and_is_separate_from_worker_report(self):
         source=(paths.ROOT/'device/src/main.mm').read_text()
         view=source.split('- (void)viewDidLoad {',1)[1].split('- (void)beginPreparation {',1)[0]

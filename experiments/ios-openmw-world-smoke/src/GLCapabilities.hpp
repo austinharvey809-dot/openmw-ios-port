@@ -8,6 +8,14 @@
 
 namespace G4 {
 using StartupTrace=std::function<void(const std::string&)>;
+using CurrentGLContext=std::function<bool()>;
+
+// Probe the actual platform context handle, never a context-dependent GL entry
+// point or GraphicsWindowEmbedded::isCurrent() (which assumes an external owner).
+inline void requireCurrentGLContext(const CurrentGLContext& current){
+    if(!current||!current())
+        throw std::runtime_error("G4 startup stage=capabilities: no current GL context");
+}
 
 inline osg::State& capabilityState(osg::GraphicsContext* context){
     if(!context||!context->getState())
@@ -29,10 +37,11 @@ inline void registerGLCapabilities(osg::GraphicsContext* context){
 
 // Caller owns the genuine current GL context and CapabilityRegistryMutex.
 // No dummy capabilities, decoder substitutes or extension strings are injected.
-inline void initializeGLCapabilities(osg::GraphicsContext* context,const StartupTrace& trace={}){
+inline void initializeGLCapabilities(osg::GraphicsContext* context,const CurrentGLContext& current,const StartupTrace& trace={}){
     auto& state=capabilityState(context);
+    requireCurrentGLContext(current);
     if(!glGetString(GL_VERSION))
-        throw std::runtime_error("G4 startup stage=capabilities: no current GL context");
+        throw std::runtime_error("G4 startup stage=capabilities: current context has no GL version");
     if(trace)trace("osg.extension-procs.begin");
     state.initializeExtensionProcs();
     if(trace)trace("osg.extension-procs.complete");

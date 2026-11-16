@@ -1,5 +1,10 @@
 # G4 Build #3 startup regression and proposed Build #4
 
+Historical Build #4 investigation. Its genuine initialization-order correction
+is retained. Build #4 subsequently exposed a host-test contextless GL assumption;
+see [the proposed Build #5 correction](BUILD5-HOST-REGRESSION.md) for the current
+findings and validation boundaries. G4 physical acceptance is still pending.
+
 Investigated against `ios-port` commit
 `e8ee8bfe740c09681004c91494826f4dc8d07610`. Changes remain uncommitted and
 unpublished. G4 physical acceptance failed; accepted G1D/G2/G3 milestones remain

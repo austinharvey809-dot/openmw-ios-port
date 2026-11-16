@@ -1,5 +1,16 @@
 # G4 genuine world integration foundation
 
+## Proposed Build #5: host startup regression and retained failure evidence
+
+Build #4 passed compilation and the accepted native suites, then failed its new
+contextless startup case on macOS. The reviewed initialization-order fix remains.
+Native context-handle checks now precede GL dispatch; the same strengthened
+headless checks run in an early small target and the full world suite. Subprocess
+outcomes and partial results are retained even on failure. Windows validation is
+complete; corrected macOS/iPhoneOS behavior is unverified. See the
+[Build #5 investigation and exact review inventory](BUILD5-HOST-REGRESSION.md).
+No Build #5 commit, push or dispatch has been performed.
+
 ## Build #3 physical startup regression / proposed Build #4
 
 Build #3 compiled, linked and packaged successfully, but physical launches stop
