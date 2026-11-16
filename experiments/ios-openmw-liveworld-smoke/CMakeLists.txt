@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.24)
+project(OpenMWLiveWorldIntegration LANGUAGES C CXX)
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+get_filename_component(G6_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
+set(CMAKE_PROJECT_OpenMWWorldIntegration_INCLUDE
+  "${G6_ROOT}/../ios-openmw-engine-smoke/cmake/attach_host.cmake")
+add_subdirectory("${G6_ROOT}/../ios-openmw-world-smoke" "${CMAKE_CURRENT_BINARY_DIR}/g4-provider" EXCLUDE_FROM_ALL)
+get_filename_component(G4_ROOT "${G6_ROOT}/../ios-openmw-world-smoke" ABSOLUTE)
+foreach(_g6_variable G4_REPO G4_GENERATED G4_OSG_SOURCE G4_OSG_GENERATED_INCLUDE G5_GENERATED)
+  get_directory_property(${_g6_variable} DIRECTORY "${G4_ROOT}" DEFINITION ${_g6_variable})
+endforeach()
+enable_testing()
+include(cmake/host.cmake)

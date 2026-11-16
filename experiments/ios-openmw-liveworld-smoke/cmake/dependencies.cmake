@@ -1,0 +1,90 @@
+get_filename_component(G6_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+get_filename_component(G4_REPO "${G6_ROOT}/../.." ABSOLUTE)
+set(G6_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/g6-generated")
+set(G6_DEPENDENCIES_SOURCE "" CACHE PATH "Verified G6 dependency source directory")
+if(TARGET g6-mygui)
+  return()
+endif()
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${G6_ROOT}/tools/dependencies.py"
+  --output "${G6_DEPENDENCIES_SOURCE}" --offline COMMAND_ERROR_IS_FATAL ANY OUTPUT_QUIET)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${G6_ROOT}/tools/prepare.py"
+  --output "${G6_GENERATED}" COMMAND_ERROR_IS_FATAL ANY OUTPUT_QUIET)
+execute_process(COMMAND "${Python3_EXECUTABLE}" "${G6_ROOT}/tools/prepare_mygui.py"
+  --source "${G4_DEPENDENCIES_SOURCE}/mygui/MyGUIEngine/include"
+  --output "${G6_GENERATED}/mygui" COMMAND_ERROR_IS_FATAL ANY OUTPUT_QUIET)
+set(_g6_sdl "${G6_DEPENDENCIES_SOURCE}/SDL2-2.32.10")
+set(_g6_recast "${G6_DEPENDENCIES_SOURCE}/recastnavigation-03259f3287ff8330f0d66fcd98d022edddffaa97")
+set(_g6_icu "${G6_DEPENDENCIES_SOURCE}/icu-release-70-1/icu4c/source")
+
+# Actual upstream FreeType implementation; optional compressed-font/image
+# codecs are outside this component. Original game image codecs remain intact.
+function(g6_define_font_library)
+  # Function scope keeps FreeType's static-library policy out of the accepted
+  # OSG/Bullet provider that is configured after the early project hook.
+  set(BUILD_SHARED_LIBS OFF)
+  foreach(_g6_codec ZLIB BZIP2 PNG HARFBUZZ BROTLI)
+    set(FT_DISABLE_${_g6_codec} ON CACHE BOOL "" FORCE)
+  endforeach()
+  set(CMAKE_PROJECT_freetype_INCLUDE "${G6_ROOT}/cmake/freetype_static.cmake")
+  add_subdirectory("${G6_DEPENDENCIES_SOURCE}/freetype-2.13.3" "${CMAKE_CURRENT_BINARY_DIR}/g6-freetype" EXCLUDE_FROM_ALL)
+endfunction()
+g6_define_font_library()
+
+# All MyGUI consumers and all its genuine core sources share the same UTF ABI.
+function(g6_font_gui_inventory output)
+  include("${G4_DEPENDENCIES_SOURCE}/mygui/MyGUIEngine/MyGUIEngine.list")
+  set(_g6_list)
+  foreach(_g6_file IN LISTS SOURCE_FILES)
+    list(APPEND _g6_list "${G4_DEPENDENCIES_SOURCE}/mygui/MyGUIEngine/${_g6_file}")
+  endforeach()
+  set(${output} "${_g6_list}" PARENT_SCOPE)
+endfunction()
+g6_font_gui_inventory(_g6_mygui_sources)
+add_library(g6-mygui STATIC ${_g6_mygui_sources})
+target_include_directories(g6-mygui BEFORE PUBLIC "${G6_GENERATED}/mygui")
+target_compile_definitions(g6-mygui PUBLIC MYGUI_STATIC MYGUI_USE_FREETYPE PRIVATE MYGUI_BUILD MYGUI_DISABLE_PLUGINS)
+target_link_libraries(g6-mygui PUBLIC freetype)
+target_compile_features(g6-mygui PUBLIC cxx_std_20)
+
+# Same pinned Detour sources used by upstream, not a navigator stub. This slice
+# links native query/character interfaces but does not instantiate an AI world.
+set(_g6_detour_sources)
+foreach(_g6_file DetourAlloc DetourAssert DetourCommon DetourNavMesh DetourNavMeshBuilder DetourNavMeshQuery DetourNode)
+  list(APPEND _g6_detour_sources "${_g6_recast}/Detour/Source/${_g6_file}.cpp")
+endforeach()
+add_library(g6-detour STATIC ${_g6_detour_sources})
+target_include_directories(g6-detour PUBLIC "${_g6_recast}/Detour/Include" "${_g6_recast}/Recast/Include")
+
+# Genuine ICU common/i18n inventory and complete official 70.1 little-endian
+# data, compiled for the actual target. No empty bootstrap-data replacement.
+set(CMAKE_ASM_COMPILER "${CMAKE_C_COMPILER}")
+enable_language(ASM)
+set(_g6_icu_data "${G6_DEPENDENCIES_SOURCE}/icu-data/icudt70l.dat")
+if(APPLE)
+  set(_g6_icu_assembly ".section __TEXT,__const\n.p2align 4\n.globl _icudt70_dat\n_icudt70_dat:\n")
+elseif(WIN32)
+  set(_g6_icu_assembly ".section .rdata,\"dr\"\n.p2align 4\n.global icudt70_dat\nicudt70_dat:\n")
+else()
+  set(_g6_icu_assembly ".section .rodata\n.p2align 4\n.global icudt70_dat\nicudt70_dat:\n")
+endif()
+configure_file("${G6_ROOT}/cmake/icudata.S.in" "${G6_GENERATED}/icudata.S" @ONLY)
+set_source_files_properties("${G6_GENERATED}/icudata.S" PROPERTIES OBJECT_DEPENDS "${_g6_icu_data}")
+add_library(g6-icu-data STATIC "${G6_GENERATED}/icudata.S")
+foreach(_g6_lib common i18n)
+  file(STRINGS "${_g6_icu}/${_g6_lib}/sources.txt" _g6_icu_inventory)
+  set(_g6_icu_sources)
+  foreach(_g6_unit IN LISTS _g6_icu_inventory)
+    if(NOT _g6_unit STREQUAL "" AND NOT _g6_unit MATCHES "^#")
+      list(APPEND _g6_icu_sources "${_g6_icu}/${_g6_lib}/${_g6_unit}")
+    endif()
+  endforeach()
+  add_library(g6-icu-${_g6_lib} STATIC ${_g6_icu_sources})
+  target_include_directories(g6-icu-${_g6_lib} PUBLIC "${_g6_icu}/common" "${_g6_icu}/i18n")
+  target_compile_definitions(g6-icu-${_g6_lib} PUBLIC U_STATIC_IMPLEMENTATION)
+  target_compile_features(g6-icu-${_g6_lib} PRIVATE cxx_std_17)
+endforeach()
+target_compile_definitions(g6-icu-common PRIVATE U_COMMON_IMPLEMENTATION)
+target_compile_definitions(g6-icu-i18n PRIVATE U_I18N_IMPLEMENTATION)
+target_link_libraries(g6-icu-common PUBLIC g6-icu-data)
+target_link_libraries(g6-icu-i18n PUBLIC g6-icu-common)

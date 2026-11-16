@@ -1,0 +1,63 @@
+{
+  "sdl": {
+    "archive": "SDL2-2.32.10.tar.gz",
+    "directory": "SDL2-2.32.10",
+    "prefix": "SDL2-2.32.10",
+    "url": "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz",
+    "algorithm": "sha256",
+    "hash": "5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165",
+    "bytes": 7630262,
+    "ignored_android_symlinks": [
+      "SDL2-2.32.10/android-project-ant/src",
+      "SDL2-2.32.10/android-project-ant/AndroidManifest.xml"
+    ],
+    "include_prefixes": [
+      "include/",
+      "COPYING.txt",
+      "LICENSE.txt"
+    ]
+  },
+  "recast": {
+    "archive": "recast.zip",
+    "directory": "recastnavigation-03259f3287ff8330f0d66fcd98d022edddffaa97",
+    "prefix": "recastnavigation-03259f3287ff8330f0d66fcd98d022edddffaa97",
+    "url": "https://codeload.github.com/OpenMW/recastnavigation/zip/03259f3287ff8330f0d66fcd98d022edddffaa97",
+    "algorithm": "sha512",
+    "hash": "63db2ac90904764d7f1466d3c95994ec51d777cddd870b70f8ef674c09ed166b3d16ffc4ac1d18d0eab865fda4bf51b6ea17049025b66a338d3cadd0f48dc712",
+    "bytes": 1446030
+  },
+  "icu": {
+    "archive": "icu-release-70-1.zip",
+    "directory": "icu-release-70-1",
+    "prefix": "icu-release-70-1",
+    "url": "https://codeload.github.com/unicode-org/icu/zip/refs/tags/release-70-1",
+    "algorithm": "sha512",
+    "hash": "89c072d13638fc344c9b6ae70093ca15eb3bf55c64986d3c92bb43f7432dc63d4796f6f43ee717b40d500859eee30d7b7b740bd68c9b36224ea7b2eea384c72a",
+    "bytes": 70539707,
+    "include_prefixes": [
+      "icu4c/source/common/",
+      "icu4c/source/i18n/",
+      "LICENSE",
+      "icu4c/LICENSE",
+      "icu4c/readme.html"
+    ]
+  },
+  "icu_data": {
+    "archive": "icu4c-70_1-data-bin-l.zip",
+    "directory": "icu-data",
+    "prefix": null,
+    "url": "https://github.com/unicode-org/icu/releases/download/release-70-1/icu4c-70_1-data-bin-l.zip",
+    "algorithm": "sha512",
+    "hash": "041ff3480566330d043d9ddcd31e8851e875183d158ea3ce625583b4a9d96166497a9eedc0e72e2f7a3abc3a9110a0372546151b264ff4d1623215aab33552f5",
+    "bytes": 11774089
+  },
+  "freetype": {
+    "archive": "freetype-2.13.3.tar.xz",
+    "directory": "freetype-2.13.3",
+    "prefix": "freetype-2.13.3",
+    "url": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz",
+    "algorithm": "sha256",
+    "hash": "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289",
+    "bytes": 2617564
+  }
+}
